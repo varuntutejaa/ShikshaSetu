@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     )
 
     # --- CORS ---
-    cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
+    cors_origins: str = Field(
+        default="http://localhost:3000,https://shikshasetu-teacher.onrender.com",
+        alias="CORS_ORIGINS",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:

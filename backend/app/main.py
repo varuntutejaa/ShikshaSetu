@@ -22,6 +22,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("shikshasetu")
 
+PUBLIC_WEB_ORIGINS = ["https://shikshasetu-teacher.onrender.com"]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,9 +51,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    # Always sourced from CORS_ORIGINS — never "*", in dev or prod, per the
-    # security requirement that origins are explicit and configurable.
-    allow_origins=settings.cors_origin_list,
+    # Explicit origins only; no wildcard in dev or prod.
+    allow_origins=list(dict.fromkeys([*settings.cors_origin_list, *PUBLIC_WEB_ORIGINS])),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
