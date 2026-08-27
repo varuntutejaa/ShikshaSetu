@@ -22,7 +22,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("shikshasetu")
 
-PUBLIC_WEB_ORIGINS = ["https://shikshasetu-teacher.onrender.com"]
+PUBLIC_WEB_ORIGINS = [
+    "https://shikshasetu-teacher.onrender.com",
+    "https://shikshasetu-sigma.vercel.app",
+]
 
 
 @asynccontextmanager
