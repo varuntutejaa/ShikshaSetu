@@ -1,0 +1,316 @@
+# ShikshaSetu Backend
+
+FastAPI backend for ShikshaSetu — the AI-powered multilingual classroom
+assistant connecting a Hindi-speaking teacher to Ho/Mundari/Santhali-speaking
+students, via Sarvam AI (speech/translation) and a pluggable LLM (lessons,
+quizzes, AI Viva).
+
+```
+Teacher Web App
+        ↓
+      FastAPI
+        ↓
+ ┌──────┼────────┐
+ ↓      ↓        ↓
+Sarvam  LLM   PostgreSQL
+ ↓      ↓        ↓
+Voice  AI      Progress
+ ↓      ↓
+Translation / Quiz / Viva
+        ↓
+   Android Student App
+```
+
+The single most important thing this backend does:
+
+```
+Hindi teacher speech → STT → Hindi transcript → translation →
+target language text → TTS → student audio
+```
+
+---
+
+## 1. Requirements
+
+- Python 3.11+
+- PostgreSQL 14+ (or run in mock mode with any DB URL SQLAlchemy supports —
+  see [Mock Mode](#8-mock-mode))
+- (Optional) a Sarvam AI API key — https://dashboard.sarvam.ai
+- (Optional) an LLM API key (OpenAI or Sarvam's chat-completion API)
+
+## 2–3. Installation & virtual environment
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+
+pip install -r requirements.txt
+```
+
+## 4. Environment variables
+
+Copy the example file and fill in what you have:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Purpose |
+|---|---|
+| `ENVIRONMENT` | `development` / `production` |
+| `MOCK_MODE` | `true` (default) runs entirely offline with deterministic fake AI output. `false` calls real Sarvam/LLM APIs. |
+| `SARVAM_API_KEY` | Sarvam AI subscription key. Required only when `MOCK_MODE=false`. |
+| `SARVAM_BASE_URL` | Defaults to `https://api.sarvam.ai`. |
+| `LLM_PROVIDER` | `mock` \| `openai` \| `sarvam`. |
+| `LLM_API_KEY` | API key for the chosen LLM provider. |
+| `DATABASE_URL` | SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pass@host:5432/db`. |
+| `CORS_ORIGINS` | Comma-separated list of allowed frontend origins. |
+
+**Secrets never leave the backend.** No API key is ever returned in a
+response or forwarded to the Next.js frontend or the Android app.
+
+## 5. PostgreSQL setup
+
+```bash
+createdb shikshasetu
+# or with Docker:
+docker run --name shikshasetu-db -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=shikshasetu -p 5432:5432 -d postgres:16
+```
+
+Set `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/shikshasetu`
+in `.env`. Tables are created automatically on startup (`init_models()` in
+`app/main.py`) — there's no separate migration step for this first version
+(see `app/core/database.py` for the note on swapping in Alembic later).
+
+> Don't have Postgres installed? The app also happily runs against SQLite
+> for local development — set `DATABASE_URL=sqlite+aiosqlite:///./dev.db`.
+> All models use dialect-portable types (`Uuid`, `JSON`) for exactly this
+> reason. Use real Postgres before deploying.
+
+## 6. Running the backend
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+## 7. Swagger / API docs
+
+```
+http://localhost:8000/docs        # Swagger UI
+http://localhost:8000/redoc       # ReDoc
+http://localhost:8000/openapi.json
+```
+
+## 8. Mock mode
+
+`MOCK_MODE=true` (the default) makes every AI-backed call deterministic and
+free:
+
+- **STT** returns a canned Hindi transcript.
+- **Translation** returns a labelled mock translation (or a curated Hindi→
+  Santhali sample for the flagship demo sentence).
+- **TTS** returns a tiny valid silent WAV so the audio pipeline is
+  exercisable end-to-end.
+- **LLM** (lesson/quiz/viva generation + viva evaluation) uses a
+  template-based generator (`app/services/llm_service.py:MockLLMProvider`)
+  that still varies with grade/subject/topic and does genuine semantic-ish
+  answer checking (accepts "5", "five", or "three plus two is five" for an
+  expected answer of 5 — see `_extract_number`).
+
+This means the frontend and Android app can be fully developed and demoed
+without spending any API credits. Flip to real APIs with:
+
+```bash
+MOCK_MODE=false
+SARVAM_API_KEY=sk_...
+LLM_PROVIDER=openai   # or sarvam
+LLM_API_KEY=sk_...
+```
+
+Ho and Mundari currently have **no confirmed Sarvam language code** (only
+Hindi and Santali are documented as supported at the time of writing — see
+`app/core/languages.py`). Requests for Ho/Mundari always take the mock
+path even with `MOCK_MODE=false` and a valid key, rather than guessing at
+an unsupported/invented API parameter. The moment Sarvam documents support,
+update `SUPPORTED_LANGUAGES` in `app/core/languages.py` — nothing else
+needs to change.
+
+## 9. Real Sarvam configuration
+
+Verified against https://docs.sarvam.ai at the time of writing:
+
+| Endpoint | Method | Auth header |
+|---|---|---|
+| `POST https://api.sarvam.ai/speech-to-text` | multipart: `file`, `model=saaras:v3`, `mode=transcribe` | `api-subscription-key` |
+| `POST https://api.sarvam.ai/translate` | json: `input`, `source_language_code`, `target_language_code`, `mode` | `api-subscription-key` |
+| `POST https://api.sarvam.ai/text-to-speech` | json: `text`, `language_code`, `speaker`, `model=bulbul:v3` | `api-subscription-key` |
+| `POST https://api.sarvam.ai/v1/chat/completions` | OpenAI-compatible | `api-subscription-key` or `Authorization: Bearer` |
+
+Get a key at https://dashboard.sarvam.ai, set `SARVAM_API_KEY` and
+`MOCK_MODE=false`. Re-verify the exact request/response shape against the
+live docs before a production launch — APIs evolve.
+
+## 10. API examples
+
+```bash
+# Translate
+curl -X POST localhost:8000/api/translation \
+  -H "Content-Type: application/json" \
+  -d '{"text":"तीन और दो कितने होते हैं?","source_language":"hi","target_language":"sat"}'
+
+# Generate a lesson
+curl -X POST localhost:8000/api/lessons/generate \
+  -H "Content-Type: application/json" \
+  -d '{"grade":2,"subject":"Mathematics","topic":"Addition 1-20","teacher_language":"hi","student_language":"sat"}'
+
+# Generate a quiz from that lesson
+curl -X POST localhost:8000/api/quizzes/generate \
+  -H "Content-Type: application/json" \
+  -d '{"lesson_id":"<lesson-id>","number_of_questions":10,"language":"sat","types":["mcq","true_false"]}'
+
+# Start an AI Viva
+curl -X POST localhost:8000/api/viva/start \
+  -H "Content-Type: application/json" \
+  -d '{"student_id":"<student-id>","subject":"Mathematics","topic":"Addition","language":"sat","number_of_questions":5}'
+```
+
+Every error response has the same shape:
+
+```json
+{"error": {"code": "TRANSLATION_FAILED", "message": "Translation service temporarily unavailable."}}
+```
+
+## 11. WebSocket protocol
+
+### `WS /ws/classroom/{session_id}` — the live translation pipeline
+
+Client → server:
+- text/JSON: `{"type": "config", "source_language": "hi", "target_language": "sat"}`
+- binary: raw audio bytes for one utterance segment
+
+Server → client, per segment, in order:
+```json
+{"type": "transcript",  "text": "...", "language": "hi"}
+{"type": "translation", "source_language": "hi", "target_language": "sat", "text": "..."}
+{"type": "audio",       "format": "audio/wav", "data": "<base64>"}
+{"type": "latency",     "total_ms": 1720}
+```
+On failure: `{"type": "error", "message": "..."}`. Latency is real wall-clock
+time from receiving the audio frame to emitting the audio response — never
+fabricated. The pipeline calls Sarvam's synchronous REST endpoints in
+sequence per segment (no LLM call in the hot path) to stay lightweight and
+target the ≤3s requirement; swapping in Sarvam's streaming STT protocol
+later is a drop-in change inside `app/services/sarvam_service.py`.
+
+### `WS /ws/student/{student_id}` — push channel to a student device
+
+```json
+// client -> server (keepalive)
+{"type": "ping"}
+// server -> client
+{"type": "pong"}
+{"type": "notification", "event": "...", "payload": {...}}
+```
+
+## 12. Android integration instructions
+
+The Android app **must never call Sarvam or the LLM provider directly** —
+every call goes through this backend:
+
+```
+Android → HTTPS/WebSocket → FastAPI → Sarvam / LLM
+```
+
+Retrofit-friendly REST surface (all under `/api/student/{id}/...`):
+
+- `GET  /api/student/{id}` — profile
+- `GET  /api/student/{id}/lessons` — assigned lessons (mother-tongue script + activity)
+- `GET  /api/student/{id}/quizzes` — assigned quizzes, **correct answers withheld**
+- `POST /api/student/{id}/quiz-result?quiz_id=...` — submit answers, get graded
+- `POST /api/student/{id}/progress` — record a progress event
+- `POST /api/student/{id}/viva` — start an AI Viva for this student
+- `POST /api/student/{id}/sync` — offline sync batch (see below)
+- `WS   /ws/student/{id}` — realtime push notifications
+
+All response bodies are plain JSON — no custom envelope beyond the
+`{"error": {...}}` shape on failure — so a generated Retrofit/Moshi client
+works with zero hand-written adapters.
+
+## 13. Offline sync
+
+The Android app queues events locally (Room) while offline and flushes them
+via `POST /api/sync` (or the per-student `POST /api/student/{id}/sync`):
+
+```json
+{
+  "student_id": "...",
+  "events": [
+    {"event_id": "uuid-generated-on-device", "type": "quiz_completed",
+     "timestamp": "2026-08-27T10:00:00Z", "payload": {"quiz_id": "...", "score": 8}}
+  ]
+}
+```
+
+```json
+{"processed": ["evt-1"], "failed": []}
+```
+
+Each `(student_id, event_id)` pair is recorded once in the `sync_events`
+table. Re-submitting the same batch after a dropped connection is safe —
+already-seen events are reported as processed again without being
+re-applied (see `app/services/sync_service.py`).
+
+## 14. Deployment
+
+```bash
+docker build -t shikshasetu-backend .
+docker run -p 8000:8000 --env-file .env shikshasetu-backend
+```
+
+Point `DATABASE_URL` at a managed Postgres instance, set real
+`SARVAM_API_KEY` / `LLM_API_KEY`, set `MOCK_MODE=false`,
+`ENVIRONMENT=production`, and set `CORS_ORIGINS` to your real frontend
+origin(s) — CORS never falls back to `*`.
+
+Generated audio is written to local disk under `media/audio/` and served at
+`/media/audio/...` (see `app/core/storage.py`). Mount a persistent volume
+there, or swap `save_audio_file()` for an S3/GCS client before deploying
+somewhere with an ephemeral filesystem.
+
+---
+
+## Testing
+
+```bash
+pytest -v
+```
+
+19 tests cover health, translation validation (including the Ho/Mundari
+mock-fallback path), lesson generation, quiz generation (teacher view has
+`correct_answer`, student view never does), quiz scoring, the full AI Viva
+flow including semantic word-form answer matching, student progress, and
+sync idempotency. All tests run against an isolated SQLite database and
+mock AI providers — zero network calls, zero API credits.
+
+## Project layout
+
+```
+app/
+├── main.py                 FastAPI app, CORS, error handlers, router wiring
+├── core/                   config, DB session, language config, exceptions, local storage
+├── api/routes/             REST endpoints (health, translation, speech, lessons,
+│                           quizzes, viva, students, sync)
+├── api/websocket/          /ws/classroom, /ws/student
+├── services/                business logic + external API clients
+│   ├── sarvam_service.py    STT / translate / TTS (real + mock)
+│   ├── llm_service.py       provider-agnostic LLM interface (mock / OpenAI / Sarvam)
+│   ├── translation_service.py
+│   ├── lesson_service.py
+│   ├── quiz_service.py
+│   ├── viva_service.py
+│   └── sync_service.py
+├── models/                  SQLAlchemy 2.x ORM models
+└── schemas/                  Pydantic request/response models
+```
