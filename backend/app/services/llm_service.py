@@ -290,7 +290,7 @@ PROVIDER_BASE_URLS = {
 PROVIDER_DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "sarvam": "sarvam-105b-conversations",
-    "groq": "llama-3.3-70b-versatile",
+    "groq": "openai/gpt-oss-120b",
 }
 
 
