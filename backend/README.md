@@ -109,9 +109,9 @@ flow, exposed in the Android app as a "Create demo student ID" screen
 reachable from Login.
 
 Already have a deployed database from before auth existed? Run
-`migrations/20260828_student_auth.sql` against it — the new columns are
-nullable so it's safe against existing rows, and the app also backfills
-credentials onto the pre-existing demo student on startup.
+`supabase/migrations/202608280001_student_auth.sql` against it — the new
+columns are nullable so it's safe against existing rows, and the app also
+backfills credentials onto the pre-existing demo student on startup.
 
 ## 5. Supabase PostgreSQL setup
 
