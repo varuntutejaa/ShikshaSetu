@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Bell, ChevronDown, LogOut, Settings, User } from "lucide-react";
 import {
@@ -24,6 +23,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { logoutTeacher, LANGUAGE_CODE_TO_NAME } from "@/lib/api";
 import { useTeacherAuth } from "@/lib/teacher-auth";
+import { Logo } from "@/components/brand/logo";
 
 const NOTIFICATIONS = [
   {
@@ -79,7 +79,7 @@ export function Header() {
   return (
     <header className="h-16 shrink-0 border-b border-border bg-card px-4 md:px-6 flex items-center justify-between gap-4">
       <div className="flex items-center gap-2 md:hidden">
-        <Image src="/brand/shikshasetu-mark.png" alt="" width={30} height={30} />
+        <Logo size={30} />
         <span className="font-semibold text-sm">ShikshaSetu</span>
       </div>
 

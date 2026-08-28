@@ -8,9 +8,9 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import { Loader2 } from "lucide-react";
 import { useTeacherAuth } from "@/lib/teacher-auth";
+import { Logo } from "@/components/brand/logo";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { teacher } = useTeacherAuth();
@@ -23,7 +23,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (!teacher) {
     return (
       <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-background">
-        <Image src="/brand/shikshasetu-mark.png" alt="" width={48} height={48} priority />
+        <Logo size={48} />
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     );

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -13,6 +12,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTeacherAuth } from "@/lib/teacher-auth";
+import { Logo } from "@/components/brand/logo";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -30,14 +30,7 @@ export function Sidebar() {
   return (
     <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
       <div className="flex items-center gap-2.5 px-5 h-16 border-b border-sidebar-border">
-        <Image
-          src="/brand/shikshasetu-mark.png"
-          alt=""
-          width={38}
-          height={38}
-          className="shrink-0"
-          priority
-        />
+        <Logo size={38} className="shrink-0" />
         <div className="leading-tight">
           <p className="font-semibold text-sidebar-foreground text-[15px]">ShikshaSetu</p>
           <p className="text-[11px] text-sidebar-foreground/60">Smart Education, Jharkhand</p>
