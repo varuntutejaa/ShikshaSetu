@@ -10,6 +10,16 @@
  * stream from whatever the video pipeline publishes), so the two pipelines
  * can fail, reconnect, or be muted/toggled without affecting each other —
  * per the "two independently recoverable pipelines" requirement.
+ *
+ * Two-way: this hook always connects as role="teacher". The backend
+ * broadcasts every event to both the teacher and student connections
+ * attached to the same session_id (see the websocket handler's docstring),
+ * so this hook receives events for BOTH directions - its own outgoing
+ * Hindi speech (direction "teacher_to_student") AND the student's incoming
+ * speech, translated to Hindi (direction "student_to_teacher"). Audio is
+ * only auto-played here when this client is the *listener* for that
+ * direction (student_to_teacher) - the teacher_to_student audio is meant
+ * for the student's device, not this browser tab.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,11 +34,14 @@ export type AudioPhase = "idle" | "listening" | "translating" | "delivered";
 export type WsStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 export interface AudioHistoryItem {
+  direction: "teacher_to_student" | "student_to_teacher";
   teacherText: string;
   studentText: string;
   latencyMs: number;
   time: string;
 }
+
+const MY_ROLE = "teacher" as const;
 
 const SEGMENT_MS = 3500;
 const RECONNECT_DELAY_MS = 2000;
@@ -51,8 +64,11 @@ export function useClassroomAudio() {
   const [phase, setPhase] = useState<AudioPhase>("idle");
   const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
   const [muted, setMuted] = useState(false);
+  // Hindi-side text (teacher's own words, or the Hindi translation of the student's words).
   const [teacherText, setTeacherText] = useState("");
+  // Student-language-side text (translation of the teacher's words, or the student's own words).
   const [studentText, setStudentText] = useState("");
+  const [lastDirection, setLastDirection] = useState<"teacher_to_student" | "student_to_teacher" | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [history, setHistory] = useState<AudioHistoryItem[]>([]);
@@ -68,8 +84,7 @@ export function useClassroomAudio() {
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const contextRef = useRef<Record<string, unknown> | null>(null);
   const sessionRef = useRef<{ sessionId: string; source: string; target: string } | null>(null);
-  const lastTeacherTextRef = useRef("");
-  const lastStudentTextRef = useRef("");
+  const pendingRef = useRef<{ teacherText: string; studentText: string; direction: "teacher_to_student" | "student_to_teacher" } | null>(null);
   const mimeTypeRef = useRef("audio/webm");
 
   useEffect(() => {
@@ -126,42 +141,73 @@ export function useClassroomAudio() {
         case "config_ack":
           setWsStatus("connected");
           break;
-        case "transcript":
-          lastTeacherTextRef.current = event.text ?? "";
-          setTeacherText(event.text ?? "");
+        case "transcript": {
+          const direction = event.direction ?? "teacher_to_student";
+          const text = event.text ?? "";
+          // The transcript is always in the speaker's own language: show it
+          // on the Hindi side if the teacher spoke, the student-language
+          // side if the student spoke. The *other* side fills in once the
+          // matching "translation" event arrives.
+          if (direction === "teacher_to_student") {
+            setTeacherText(text);
+            pendingRef.current = { teacherText: text, studentText: "", direction };
+          } else {
+            setStudentText(text);
+            pendingRef.current = { teacherText: "", studentText: text, direction };
+          }
+          setLastDirection(direction);
           setErrorMessage(null);
           break;
-        case "translation":
-          lastStudentTextRef.current = event.text ?? "";
-          setStudentText(event.text ?? "");
+        }
+        case "translation": {
+          const direction = event.direction ?? "teacher_to_student";
+          const text = event.text ?? "";
+          if (direction === "teacher_to_student") {
+            setStudentText(text);
+            if (pendingRef.current) pendingRef.current.studentText = text;
+          } else {
+            setTeacherText(text);
+            if (pendingRef.current) pendingRef.current.teacherText = text;
+          }
           break;
+        }
         case "audio":
-          playTranslatedAudio(event);
+          // Only play audio for the direction where THIS client is the
+          // listener, not the speaker — teacher_to_student audio is for the
+          // student's device; playing it here too would be confusing noise.
+          if (event.speaker && event.speaker !== MY_ROLE) {
+            playTranslatedAudio(event);
+          }
           setPhase("delivered");
           break;
-        case "latency":
+        case "latency": {
+          const direction = event.direction ?? lastDirection ?? "teacher_to_student";
+          const pending = pendingRef.current;
           setLatencyMs(event.total_ms ?? null);
           setHistory((h) => [
             {
-              teacherText: lastTeacherTextRef.current,
-              studentText: lastStudentTextRef.current,
+              direction,
+              teacherText: pending?.teacherText ?? "",
+              studentText: pending?.studentText ?? "",
               latencyMs: event.total_ms ?? 0,
               time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
             },
             ...h,
           ]);
+          pendingRef.current = null;
           if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
           holdTimerRef.current = setTimeout(() => {
             if (listeningRef.current) setPhase("listening");
           }, HOLD_AFTER_DELIVERED_MS);
           break;
+        }
         case "error":
           setErrorMessage(event.message ?? "Translation temporarily unavailable");
           setPhase("listening");
           break;
       }
     },
-    [playTranslatedAudio]
+    [playTranslatedAudio, lastDirection]
   );
 
   // Self-recursive on reconnect, for the same reason as
@@ -175,7 +221,7 @@ export function useClassroomAudio() {
       const socket = connectClassroomSocket(sessionId, {
         onEvent: handleEvent,
         onOpen: () => {
-          socket.sendConfig(source, target, mimeTypeRef.current, contextRef.current ?? undefined);
+          socket.sendConfig(MY_ROLE, source, target, mimeTypeRef.current, contextRef.current ?? undefined);
         },
         onClose: () => {
           socketRef.current = null;
@@ -278,17 +324,12 @@ export function useClassroomAudio() {
     setMuted,
     teacherText,
     studentText,
+    lastDirection,
     latencyMs,
     isLatencyHigh: latencyMs !== null && latencyMs > LATENCY_WARNING_MS,
     errorMessage,
     history,
     start,
     stop,
-    setDirection(sourceLanguage: string, targetLanguage: string, lessonContext?: Record<string, unknown>) {
-      if (!sessionRef.current || !socketRef.current) return;
-      sessionRef.current = { ...sessionRef.current, source: sourceLanguage, target: targetLanguage };
-      contextRef.current = lessonContext ?? contextRef.current;
-      socketRef.current.sendConfig(sourceLanguage, targetLanguage, mimeTypeRef.current, contextRef.current ?? undefined);
-    },
   };
 }

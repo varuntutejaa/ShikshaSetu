@@ -39,12 +39,17 @@ DEFAULT_TTS_SPEAKER = "anushka"
 MOCK_TRANSCRIPTS = {
     "hi": "तीन और दो जोड़ने पर कितने होते हैं?",
     "en": "How much is three plus two?",
+    # Student-side (reverse direction) mock utterance — "It is five" — so the
+    # student→teacher leg of the two-way pipeline has a realistic mock
+    # transcript instead of silently reusing the Hindi teacher line.
+    "sat": "Mon kanae.",
 }
 
 MOCK_TRANSLATIONS = {
     ("hi", "sat"): "Pe ar bar ratge kotenag kanae?",
     ("hi", "ho"): "[Ho translation placeholder — Sarvam Ho support not yet available] Pe ar bar ratge kotenag kanae?",
     ("hi", "unr"): "[Mundari translation placeholder — Sarvam Mundari support not yet available] Pe ar bar ratge kotenag kanae?",
+    ("sat", "hi"): "पाँच होते हैं।",
 }
 
 # A minimal valid (silent, ~0.2s) WAV file used as mock TTS output so the

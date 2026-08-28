@@ -115,14 +115,17 @@ credentials onto the pre-existing demo student on startup.
 
 ## 5. Supabase PostgreSQL setup
 
-Production uses Supabase as the managed PostgreSQL database. Do not create a
-separate local production database and do not expose `DATABASE_URL` to
-Next.js/browser/Android clients.
+Production uses Supabase as the managed PostgreSQL database
+(project: https://oasooktdfzkgwuulzmrr.supabase.co, ref `oasooktdfzkgwuulzmrr`).
+Do not create a separate local production database and do not expose
+`DATABASE_URL` — or any Supabase service-role/API key — to Next.js/browser/
+Android clients.
 
-Set the backend/server-side environment variable:
+Set the backend/server-side environment variable (get the exact host/password
+from Supabase Dashboard -> Project Settings -> Database -> Connection string):
 
 ```bash
-DATABASE_URL=postgresql+asyncpg://postgres.<project-ref>:<db-password>@<supabase-host>:5432/postgres?ssl=require
+DATABASE_URL=postgresql+asyncpg://postgres.oasooktdfzkgwuulzmrr:<db-password>@<supabase-host>:5432/postgres?ssl=require
 ```
 
 Apply additive migrations with the Supabase CLI:
@@ -133,6 +136,12 @@ npx supabase db push --db-url "$SUPABASE_DB_URL"
 
 SQLite remains acceptable for isolated automated tests only. Production and
 Render must use Supabase PostgreSQL.
+
+**Android never talks to Supabase (or Postgres) directly.** The app only
+ever calls the FastAPI/Render REST + WebSocket API (`API_BASE_URL` /
+`WS_BASE_URL` in `app/build.gradle.kts`); FastAPI is the sole client of
+Supabase. No Supabase URL, anon key, or service-role key is embedded in the
+Android app — see §13.
 
 ## 6. Running the backend
 
@@ -229,20 +238,39 @@ Every error response has the same shape:
 
 ## 11. WebSocket protocol
 
-### `WS /ws/classroom/{session_id}` — the live translation pipeline
+### `WS /ws/classroom/{session_id}` — the live translation pipeline (two-way)
+
+One WebSocket route, no second pipeline. A teacher connection and a student
+connection can both attach to the same `session_id`; whichever side speaks
+gets STT'd in its own language, translated to the other side's language,
+synthesized, and the result is **broadcast to every connection attached to
+that session_id** (not just echoed back to the sender) — so the speaker's
+own UI can show "you said X → Y" and the other side's device plays the
+translated audio. A single connection (no peer attached yet) behaves
+exactly as a lone echo: results go back to that one connection.
 
 Client → server:
-- text/JSON: `{"type": "config", "source_language": "hi", "target_language": "sat"}`
+- text/JSON: `{"type": "config", "role": "teacher" | "student", "source_language": "hi", "target_language": "sat", "content_type": "audio/webm"}`
+  (all fields optional; `role` defaults to `"teacher"` for backward
+  compatibility with a single-connection client, and picks default
+  source/target languages — hi→sat for teacher, sat→hi for student — that
+  an explicit `source_language`/`target_language` in the same message
+  overrides. May be sent again mid-session.)
 - binary: raw audio bytes for one utterance segment
 
-Server → client, per segment, in order:
+Server → client, per segment, in order, delivered to **every** connection
+attached to the session:
 ```json
-{"type": "transcript",  "text": "...", "language": "hi"}
-{"type": "translation", "source_language": "hi", "target_language": "sat", "text": "..."}
-{"type": "audio",       "format": "audio/wav", "data": "<base64>"}
-{"type": "latency",     "total_ms": 1720}
+{"type": "transcript",  "text": "...", "language": "hi", "speaker": "teacher", "direction": "teacher_to_student"}
+{"type": "translation", "source_language": "hi", "target_language": "sat", "text": "...", "speaker": "teacher", "direction": "teacher_to_student"}
+{"type": "audio",       "format": "audio/wav", "data": "<base64>", "speaker": "teacher", "direction": "teacher_to_student"}
+{"type": "latency",     "total_ms": 1720, "speaker": "teacher", "direction": "teacher_to_student"}
 ```
-On failure: `{"type": "error", "message": "..."}`. Latency is real wall-clock
+`speaker` is whoever's audio produced this segment; `direction` is always
+`<speaker>_to_<other>`, so a receiving client can tell whether a message is
+its own outgoing speech or incoming speech to play/display, regardless of
+its own role. On failure (sent only to the connection whose segment
+failed): `{"type": "error", "message": "..."}`. Latency is real wall-clock
 time from receiving the audio frame to emitting the audio response — never
 fabricated. The pipeline calls Sarvam's synchronous REST endpoints in
 sequence per segment (no LLM call in the hot path) to stay lightweight and
@@ -250,9 +278,9 @@ target the ≤3s requirement; swapping in Sarvam's streaming STT protocol
 later is a drop-in change inside `app/services/sarvam_service.py`.
 
 The client may also send `"content_type"` in the config message (e.g.
-`"audio/webm;codecs=opus"`) so the correct format is passed through to
-Sarvam — a real browser `MediaRecorder` doesn't produce WAV. Defaults to
-`audio/webm` if omitted.
+`"audio/webm;codecs=opus"` for a browser, `"audio/mp4"` for Android's
+`MediaRecorder`) so the correct format is passed through to Sarvam — real
+recorders don't produce WAV. Defaults to `audio/webm` if omitted.
 
 ### `WS /ws/student/{student_id}` — push channel to a student device
 
@@ -305,14 +333,23 @@ GET  /api/classroom/session/{id}
 
 ## 13. Android integration instructions
 
-The Android app **must never call Sarvam or the LLM provider directly** —
-every call goes through this backend:
+The Android app **must never call Sarvam, the LLM provider, or Supabase/
+Postgres directly** — every call goes through this backend:
 
 ```
-Android → HTTPS/WebSocket → FastAPI → Sarvam / LLM
+Android → HTTPS/WebSocket → FastAPI → Sarvam / LLM / Supabase Postgres
 ```
 
-Retrofit-friendly REST surface (all under `/api/student/{id}/...`):
+Auth (Student ID + password, no email — see §4a):
+
+- `POST /api/auth/student/login` — returns a bearer session token + profile
+- `POST /api/auth/student/register` — demo/admin-only student creation
+- `POST /api/auth/student/logout` — revokes the session token
+- `GET  /api/auth/student/me` — current student from the bearer token
+
+Retrofit-friendly REST surface (all under `/api/student/{id}/...`, requires
+`Authorization: Bearer <token>` for the logged-in student — a token can only
+read/write its own student's data):
 
 - `GET  /api/student/{id}` — profile
 - `GET  /api/student/{id}/lessons` — assigned lessons (mother-tongue script + activity)

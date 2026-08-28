@@ -54,7 +54,7 @@ import {
   setClassroomContent,
   startClassroom,
 } from "@/lib/api";
-import { connectClassroomPresenceSocket } from "@/lib/classroom-socket";
+import { connectClassroomPresenceSocket, connectClassroomSocket } from "@/lib/classroom-socket";
 import { useClassroomAudio } from "@/hooks/use-classroom-audio";
 import { useClassroomVideo } from "@/hooks/use-classroom-video";
 
@@ -73,7 +73,7 @@ export function LiveClassroom() {
   const [lessonId, setLessonId] = useState("");
   const [lessonContext, setLessonContext] = useState<Record<string, unknown> | null>(null);
   const [slideIndex, setSlideIndex] = useState(0);
-  const [voiceDirection, setVoiceDirection] = useState<"teacher_to_student" | "student_to_teacher">("teacher_to_student");
+  const [simulatingStudent, setSimulatingStudent] = useState(false);
 
   const audio = useClassroomAudio();
   // Destructure the ref out separately from the rest of the hook's return —
@@ -248,19 +248,67 @@ export function LiveClassroom() {
     }
   }
 
-  function handleVoiceDirectionChange(value: "teacher_to_student" | "student_to_teacher") {
-    setVoiceDirection(value);
-    const teacherLanguageCode = LANGUAGE_NAME_TO_CODE[TODAY_CLASS.teacherLanguage] ?? "hi";
+  /**
+   * Exercises the real student -> teacher leg of the two-way pipeline
+   * without a second physical device: opens a genuinely separate WebSocket
+   * connection to the SAME session with role="student" (exactly what the
+   * Android app would do), sends one short mock audio segment, and closes.
+   * Because the backend broadcasts to every connection attached to the
+   * session, the teacher's own persistent connection (above) receives the
+   * resulting transcript/translation/audio/latency events automatically —
+   * this is not a UI simulation, it's a real round trip through the same
+   * backend pipeline a real second device would use. Clearly labeled as a
+   * mock-audio test since no physical microphone is used for it.
+   */
+  async function handleSimulateStudentReply() {
+    if (!sessionIdRef.current || simulatingStudent) return;
+    setSimulatingStudent(true);
     const studentLanguageCode = LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat";
-    if (value === "teacher_to_student") {
-      audio.setDirection(teacherLanguageCode, studentLanguageCode, lessonContext ?? undefined);
-    } else {
-      audio.setDirection(studentLanguageCode, teacherLanguageCode, lessonContext ?? undefined);
-    }
+    const teacherLanguageCode = LANGUAGE_NAME_TO_CODE[TODAY_CLASS.teacherLanguage] ?? "hi";
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const socket = connectClassroomSocket(sessionIdRef.current!, {
+        onOpen: () => {
+          socket.sendConfig("student", studentLanguageCode, teacherLanguageCode, "audio/wav", lessonContext ?? undefined);
+          // A short placeholder blob, not a real recording — MOCK_MODE
+          // returns a deterministic transcript regardless of audio content;
+          // this button only produces a meaningful result in mock mode.
+          setTimeout(() => socket.sendAudioSegment(new Blob([new Uint8Array(256)], { type: "audio/wav" })), 150);
+        },
+        onEvent: (event) => {
+          if (event.type === "latency") {
+            setTimeout(() => {
+              socket.close();
+              finish();
+            }, 150);
+          }
+          if (event.type === "error") {
+            socket.close();
+            finish();
+          }
+        },
+        onClose: finish,
+        onSocketError: finish,
+      });
+      setTimeout(finish, 10000); // safety timeout so the button never gets stuck
+    });
+
+    setSimulatingStudent(false);
   }
 
-  const isTeacherVisible = listening && !audio.muted && audio.phase !== "idle" && !!audio.teacherText;
-  const isStudentVisible = isTeacherVisible && audio.phase === "delivered";
+  // Both panels are driven by the backend's broadcast events now, not a
+  // manual "who's speaking" toggle — teacher_to_student fills these in when
+  // the teacher speaks, student_to_teacher fills them in (via a *different*
+  // physical device, e.g. the Android app, attached to the same session_id)
+  // when the student speaks. See useClassroomAudio's direction handling.
+  const isTeacherTextVisible = listening && audio.phase !== "idle" && !!audio.teacherText;
+  const isStudentTextVisible = listening && audio.phase !== "idle" && !!audio.studentText;
 
   return (
     <div className="mx-auto max-w-6xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
@@ -336,21 +384,39 @@ export function LiveClassroom() {
                     Translated exchanges will appear here as the class progresses.
                   </p>
                 )}
-                {audio.history.map((h, i) => (
-                  <div
-                    key={`${h.time}-${i}`}
-                    className="rounded-lg border border-border p-3 space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="text-[11px] text-muted-foreground">{h.time}</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {(h.latencyMs / 1000).toFixed(1)}s
+                {audio.history.map((h, i) => {
+                  const fromStudent = h.direction === "student_to_teacher";
+                  return (
+                    <div
+                      key={`${h.time}-${i}`}
+                      className="rounded-lg border border-border p-3 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "font-normal text-[11px]",
+                            fromStudent ? "border-primary/30 text-primary" : "border-border text-foreground"
+                          )}
+                        >
+                          {fromStudent ? "Student" : "Teacher"}
+                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <p className="text-[11px] text-muted-foreground">{h.time}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {(h.latencyMs / 1000).toFixed(1)}s
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-sm text-foreground">
+                        {fromStudent ? h.studentText : h.teacherText}
+                      </p>
+                      <p className="text-sm text-primary">
+                        {fromStudent ? h.teacherText : h.studentText}
                       </p>
                     </div>
-                    <p className="text-sm text-foreground">{h.teacherText}</p>
-                    <p className="text-sm text-primary">{h.studentText}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </SheetContent>
           </Sheet>
@@ -431,15 +497,16 @@ export function LiveClassroom() {
         </div>
         <div className="lg:col-span-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Badge variant="secondary">Slide {slideIndex + 1}</Badge>
-          <Select value={voiceDirection} onValueChange={handleVoiceDirectionChange}>
-            <SelectTrigger size="sm" className="w-[230px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="teacher_to_student">Teacher Hindi → Student language</SelectItem>
-              <SelectItem value="student_to_teacher">Student language → Teacher Hindi</SelectItem>
-            </SelectContent>
-          </Select>
+          <Button
+            onClick={handleSimulateStudentReply}
+            variant="outline"
+            size="sm"
+            disabled={!listening || simulatingStudent}
+            className="gap-1.5"
+          >
+            <Users className="h-3.5 w-3.5" />
+            {simulatingStudent ? "Simulating…" : "Simulate Student Reply (mock audio)"}
+          </Button>
           {lessonContext && (
             <span>
               Context: {String(lessonContext.subject)} · {String(lessonContext.topic)}
@@ -537,7 +604,7 @@ export function LiveClassroom() {
             </Badge>
           </div>
           <div className="flex-1 flex items-center">
-            {isTeacherVisible ? (
+            {isTeacherTextVisible ? (
               <p className="text-lg leading-relaxed text-foreground animate-in fade-in slide-in-from-bottom-1 duration-300">
                 “{audio.teacherText}”
               </p>
@@ -564,7 +631,7 @@ export function LiveClassroom() {
             </Select>
           </div>
           <div className="flex-1 flex items-center">
-            {isStudentVisible ? (
+            {isStudentTextVisible ? (
               <p className="text-lg leading-relaxed text-primary animate-in fade-in slide-in-from-bottom-1 duration-300">
                 “{audio.studentText}”
               </p>
@@ -629,7 +696,7 @@ export function LiveClassroom() {
             Live Transcript
           </p>
           <div className="flex flex-wrap gap-x-1.5 gap-y-1 text-sm text-foreground/80">
-            {isTeacherVisible ? (
+            {isTeacherTextVisible ? (
               <span>{audio.teacherText}</span>
             ) : (
               <span className="text-muted-foreground">Transcript will stream here as the teacher speaks.</span>

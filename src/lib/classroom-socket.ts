@@ -6,6 +6,9 @@
 import { API_BASE_URL } from "@/lib/api";
 import type { ClassroomParticipant } from "@/lib/api";
 
+export type ClassroomRole = "teacher" | "student";
+export type ClassroomDirection = "teacher_to_student" | "student_to_teacher";
+
 export interface ClassroomEvent {
   type: "transcript" | "translation" | "audio" | "latency" | "error" | "config_ack";
   text?: string;
@@ -17,6 +20,12 @@ export interface ClassroomEvent {
   total_ms?: number;
   message?: string;
   context_used?: Record<string, unknown> | null;
+  /** Who produced this segment - present on config_ack and every broadcast event. */
+  role?: ClassroomRole;
+  speaker?: ClassroomRole;
+  /** teacher_to_student or student_to_teacher - lets a receiver tell which
+   * panel/history row a broadcast event belongs to regardless of its own role. */
+  direction?: ClassroomDirection;
 }
 
 export interface ClassroomSocketHandlers {
@@ -28,6 +37,7 @@ export interface ClassroomSocketHandlers {
 
 export interface ClassroomSocket {
   sendConfig: (
+    role: ClassroomRole,
     sourceLanguage: string,
     targetLanguage: string,
     contentType?: string,
@@ -65,11 +75,12 @@ export function connectClassroomSocket(
   };
 
   return {
-    sendConfig(sourceLanguage, targetLanguage, contentType, lessonContext) {
+    sendConfig(role, sourceLanguage, targetLanguage, contentType, lessonContext) {
       if (socket.readyState !== WebSocket.OPEN) return;
       socket.send(
         JSON.stringify({
           type: "config",
+          role,
           source_language: sourceLanguage,
           target_language: targetLanguage,
           ...(contentType ? { content_type: contentType } : {}),

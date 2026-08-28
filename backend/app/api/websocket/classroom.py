@@ -1,28 +1,41 @@
 """WS /ws/classroom/{session_id} — the core real-time translation pipeline.
 
-Teacher microphone -> WebSocket -> FastAPI -> Sarvam STT -> Hindi transcript
--> translation -> target-language text -> TTS -> audio response -> student.
+Two-way: a teacher connection and a student connection can both attach to
+the SAME `session_id`. Whichever side speaks gets STT'd in their own
+language, translated to the other side's language, synthesized, and the
+result is delivered to BOTH connections (tagged with who spoke) — so the
+speaker's own UI can show "you said X → Y" and the listener's UI/device
+plays the translated audio. This is still one WebSocket route and one
+message architecture; no second WS was added for this. A single connection
+(e.g. only the teacher, no student attached yet) behaves exactly as before:
+results are delivered back to that one connection.
+
+  Hindi mic (teacher)   -> STT(hi) -> translate(hi->sat) -> TTS(sat) -> both peers
+  Santhali mic (student) -> STT(sat) -> translate(sat->hi) -> TTS(hi) -> both peers
 
 Protocol
 --------
 Client -> server:
-  - text frame, JSON: {"type": "config", "source_language": "hi", "target_language": "sat",
-    "content_type": "audio/webm"}
-    (all fields optional; content_type should match whatever MediaRecorder.mimeType
-    the browser actually used, so Sarvam is told the real container format —
-    defaults to hi -> sat / audio/webm. May be sent again mid-session to change
-    languages.)
+  - text frame, JSON: {"type": "config", "role": "teacher" | "student",
+    "source_language": "hi", "target_language": "sat", "content_type": "audio/webm"}
+    (all fields optional; "role" defaults to "teacher" for backward
+    compatibility with a single-connection client. content_type should match
+    whatever MediaRecorder.mimeType the browser actually used, so Sarvam is
+    told the real container format — defaults to hi -> sat / audio/webm for
+    a teacher, sat -> hi for a student. May be sent again mid-session.)
   - binary frame: one utterance's raw audio bytes (WAV/webm/ogg — whatever the
     browser's MediaRecorder produced). Each binary frame is treated as one
     complete segment to keep the pipeline simple and avoid invoking an LLM
     per audio chunk, per the design constraint of a lightweight realtime path.
 
-Server -> client, in order, per segment:
-  {"type": "transcript",  "text": "...", "language": "hi"}
-  {"type": "translation", "source_language": "hi", "target_language": "sat", "text": "..."}
-  {"type": "audio",       "format": "audio/wav", "data": "<base64>"}
-  {"type": "latency",     "total_ms": 1720}
-On failure at any stage:
+Server -> client, in order, per segment, delivered to every connection
+currently attached to this session_id (so both the speaker and the other
+side receive it):
+  {"type": "transcript",  "text": "...", "language": "hi", "speaker": "teacher", "direction": "teacher_to_student"}
+  {"type": "translation", "source_language": "hi", "target_language": "sat", "text": "...", "speaker": "teacher", "direction": "teacher_to_student"}
+  {"type": "audio",       "format": "audio/wav", "data": "<base64>", "speaker": "teacher", "direction": "teacher_to_student"}
+  {"type": "latency",     "total_ms": 1720, "speaker": "teacher", "direction": "teacher_to_student"}
+On failure at any stage (sent only to the connection whose segment failed):
   {"type": "error", "message": "..."}
 
 Latency is measured wall-clock from the moment the audio frame finishes
@@ -78,21 +91,94 @@ class PresenceManager:
 presence_manager = PresenceManager()
 
 
+class AudioPeer:
+    """One connection's role + language settings within a classroom's audio
+    session. "teacher" and "student" default to mirror-image language pairs
+    so either side can start speaking without an explicit config message."""
+
+    def __init__(self, websocket: WebSocket, role: str = "teacher") -> None:
+        self.websocket = websocket
+        self.role = role
+        self.source_language = "hi" if role == "teacher" else "sat"
+        self.target_language = "sat" if role == "teacher" else "hi"
+        self.content_type = "audio/webm"
+        self.lesson_context: dict | None = None
+
+    @property
+    def direction(self) -> str:
+        return "teacher_to_student" if self.role == "teacher" else "student_to_teacher"
+
+    def apply_role(self, role: str) -> None:
+        """Reset source/target to that role's defaults only when the role is
+        actually changing — an explicit source/target in the same config
+        message (handled by the caller) still wins."""
+        if role == self.role:
+            return
+        self.role = role
+        self.source_language = "hi" if role == "teacher" else "sat"
+        self.target_language = "sat" if role == "teacher" else "hi"
+
+
+class AudioSessionRegistry:
+    """Per-classroom-session peer registry for the two-way audio pipeline.
+
+    At most one connection per (session_id, role) — a reconnect simply
+    replaces the previous entry, which is also how automatic WebSocket
+    reconnection on the client naturally resolves. Broadcasting to every
+    registered peer is what makes the pipeline two-way: if only one side is
+    connected, results go back to that one connection (identical to the
+    original single-direction behavior); once both are connected, each
+    side's translated speech reaches the other automatically.
+    """
+
+    def __init__(self) -> None:
+        # Keyed by connection identity (id(websocket)), NOT by role: every
+        # connection starts out with the default role "teacher" until its
+        # first config message arrives, so keying by role would let a second
+        # connection silently overwrite the first one's slot before either
+        # peer's real role is known — exactly the kind of bug that makes the
+        # "first" connection vanish from broadcasts. See AudioPeer.apply_role
+        # for how a peer's role can change in place without touching its
+        # registry entry.
+        self._sessions: dict[str, dict[int, AudioPeer]] = {}
+
+    def register(self, session_id: str, peer: AudioPeer) -> None:
+        self._sessions.setdefault(session_id, {})[id(peer.websocket)] = peer
+
+    def unregister(self, session_id: str, peer: AudioPeer) -> None:
+        peers = self._sessions.get(session_id)
+        if not peers:
+            return
+        peers.pop(id(peer.websocket), None)
+        if not peers:
+            self._sessions.pop(session_id, None)
+
+    def peers(self, session_id: str) -> list[AudioPeer]:
+        return list(self._sessions.get(session_id, {}).values())
+
+    async def broadcast(self, session_id: str, payload: dict) -> None:
+        for peer in self.peers(session_id):
+            try:
+                await peer.websocket.send_json(payload)
+            except Exception:
+                # A dead socket here will also surface as WebSocketDisconnect
+                # on that connection's own receive loop, which unregisters it.
+                logger.debug("Could not deliver audio event to a peer in session %s", session_id)
+
+
+audio_registry = AudioSessionRegistry()
+
+
 @router.websocket("/ws/classroom/{session_id}")
 async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     sarvam = get_sarvam_service()
 
-    source_language = "hi"
-    target_language = "sat"
-    lesson_context = None
-    # Real browser MediaRecorder output is webm/opus, not wav — the client
-    # tells us its actual mimeType once via the config message so we pass
-    # the correct content_type/extension to Sarvam instead of guessing.
-    content_type = "audio/webm"
+    peer = AudioPeer(websocket, role="teacher")
+    audio_registry.register(session_id, peer)
     segment_index = 0
 
-    logger.info("Classroom session %s connected", session_id)
+    logger.info("Classroom session %s connected (role=%s)", session_id, peer.role)
 
     try:
         while True:
@@ -112,15 +198,19 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                     continue
 
                 if config.get("type") == "config":
-                    source_language = config.get("source_language", source_language)
-                    target_language = config.get("target_language", target_language)
-                    content_type = config.get("content_type", content_type)
-                    lesson_context = config.get("lesson_context", lesson_context)
+                    requested_role = config.get("role", peer.role)
+                    peer.apply_role(requested_role)
+                    # Explicit source/target always wins over role defaults.
+                    peer.source_language = config.get("source_language", peer.source_language)
+                    peer.target_language = config.get("target_language", peer.target_language)
+                    peer.content_type = config.get("content_type", peer.content_type)
+                    peer.lesson_context = config.get("lesson_context", peer.lesson_context)
                     await websocket.send_json(
                         {
                             "type": "config_ack",
-                            "source_language": source_language,
-                            "target_language": target_language,
+                            "role": peer.role,
+                            "source_language": peer.source_language,
+                            "target_language": peer.target_language,
                         }
                     )
                 continue
@@ -133,41 +223,57 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
             started_at = time.monotonic()
 
             try:
-                extension = content_type.split("/")[-1].split(";")[0] or "wav"
+                extension = peer.content_type.split("/")[-1].split(";")[0] or "wav"
                 stt_result = await sarvam.speech_to_text(
                     audio_bytes,
-                    filename=f"segment-{session_id}-{segment_index}.{extension}",
-                    content_type=content_type,
-                    language_hint=source_language,
+                    filename=f"segment-{session_id}-{peer.role}-{segment_index}.{extension}",
+                    content_type=peer.content_type,
+                    language_hint=peer.source_language,
                 )
-                await websocket.send_json(
-                    {"type": "transcript", "text": stt_result["text"], "language": stt_result["language"]}
+                await audio_registry.broadcast(
+                    session_id,
+                    {
+                        "type": "transcript",
+                        "text": stt_result["text"],
+                        "language": stt_result["language"],
+                        "speaker": peer.role,
+                        "direction": peer.direction,
+                    },
                 )
 
                 translation = await get_translation_service().translate(
-                    stt_result["text"], source_language, target_language, lesson_context
+                    stt_result["text"], peer.source_language, peer.target_language, peer.lesson_context
                 )
-                await websocket.send_json(
+                await audio_registry.broadcast(
+                    session_id,
                     {
                         "type": "translation",
-                        "source_language": source_language,
-                        "target_language": target_language,
+                        "source_language": peer.source_language,
+                        "target_language": peer.target_language,
                         "text": translation["translated_text"],
                         "context_used": translation.get("context_used"),
-                    }
+                        "speaker": peer.role,
+                        "direction": peer.direction,
+                    },
                 )
 
-                tts_result = await sarvam.text_to_speech(translation["translated_text"], target_language)
-                await websocket.send_json(
+                tts_result = await sarvam.text_to_speech(translation["translated_text"], peer.target_language)
+                await audio_registry.broadcast(
+                    session_id,
                     {
                         "type": "audio",
                         "format": tts_result["format"],
                         "data": base64.b64encode(tts_result["audio_bytes"]).decode("ascii"),
-                    }
+                        "speaker": peer.role,
+                        "direction": peer.direction,
+                    },
                 )
 
                 total_ms = round((time.monotonic() - started_at) * 1000)
-                await websocket.send_json({"type": "latency", "total_ms": total_ms})
+                await audio_registry.broadcast(
+                    session_id,
+                    {"type": "latency", "total_ms": total_ms, "speaker": peer.role, "direction": peer.direction},
+                )
 
             except AppError as exc:
                 logger.warning("Classroom pipeline error in session %s: %s", session_id, exc.message)
@@ -179,7 +285,9 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                 )
 
     except WebSocketDisconnect:
-        logger.info("Classroom session %s disconnected", session_id)
+        logger.info("Classroom session %s disconnected (role=%s)", session_id, peer.role)
+    finally:
+        audio_registry.unregister(session_id, peer)
 
 
 @router.websocket("/ws/classroom/{session_id}/presence")
