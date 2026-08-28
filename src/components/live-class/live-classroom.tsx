@@ -164,6 +164,11 @@ export function LiveClassroom() {
       if (joined.active_session) {
         sessionIdRef.current = joined.active_session.session_id;
         openPresence(joined.active_session.session_id, studentName || "Student");
+        // Lets two website tabs actually hear each other (e.g. to test the
+        // live call without an Android device) — the tab that joined
+        // connects to the raw call as the student side, symmetric with the
+        // "teacher" side that Start Live Class connects.
+        call.start(joined.active_session.session_id, "student");
       }
     } catch (err) {
       setSessionError(err instanceof ApiError ? err.message : "Could not join class.");
@@ -355,7 +360,7 @@ export function LiveClassroom() {
               ? call.remoteSpeaking === "student"
                 ? "Live Call · Student Speaking"
                 : call.remoteSpeaking === "teacher"
-                  ? "Live Call · You're Speaking"
+                  ? "Live Call · Teacher Speaking"
                   : "Live Call Connected"
               : call.status === "connecting"
                 ? "Live Call Connecting…"
