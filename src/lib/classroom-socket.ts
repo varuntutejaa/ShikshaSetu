@@ -30,6 +30,11 @@ export interface ClassroomEvent {
 
 export interface ClassroomSocketHandlers {
   onEvent: (event: ClassroomEvent) => void;
+  /** Raw call mode only — see backend/app/api/websocket/classroom.py
+   * "Raw call mode". Fired for every binary frame the server relays: one
+   * leading speaker byte (0 = teacher, 1 = student) followed by the raw
+   * PCM16 mono 16kHz audio bytes, untouched by any AI pipeline. */
+  onRawAudio?: (data: ArrayBuffer) => void;
   onOpen?: () => void;
   onClose?: () => void;
   onSocketError?: () => void;
@@ -41,7 +46,8 @@ export interface ClassroomSocket {
     sourceLanguage: string,
     targetLanguage: string,
     contentType?: string,
-    lessonContext?: Record<string, unknown>
+    lessonContext?: Record<string, unknown>,
+    rawCall?: boolean
   ) => void;
   sendAudioSegment: (audio: Blob | ArrayBuffer) => void;
   close: () => void;
@@ -62,20 +68,27 @@ export function connectClassroomSocket(
   handlers: ClassroomSocketHandlers
 ): ClassroomSocket {
   const socket = new WebSocket(`${wsBaseUrl()}/ws/classroom/${sessionId}`);
+  // Binary frames arrive as ArrayBuffer (not Blob) so onRawAudio can read
+  // the leading speaker byte synchronously without an extra await.
+  socket.binaryType = "arraybuffer";
 
   socket.onopen = () => handlers.onOpen?.();
   socket.onclose = () => handlers.onClose?.();
   socket.onerror = () => handlers.onSocketError?.();
   socket.onmessage = (event) => {
-    try {
-      handlers.onEvent(JSON.parse(event.data));
-    } catch {
-      // ignore malformed frames
+    if (typeof event.data === "string") {
+      try {
+        handlers.onEvent(JSON.parse(event.data));
+      } catch {
+        // ignore malformed frames
+      }
+    } else if (event.data instanceof ArrayBuffer) {
+      handlers.onRawAudio?.(event.data);
     }
   };
 
   return {
-    sendConfig(role, sourceLanguage, targetLanguage, contentType, lessonContext) {
+    sendConfig(role, sourceLanguage, targetLanguage, contentType, lessonContext, rawCall) {
       if (socket.readyState !== WebSocket.OPEN) return;
       socket.send(
         JSON.stringify({
@@ -85,6 +98,7 @@ export function connectClassroomSocket(
           target_language: targetLanguage,
           ...(contentType ? { content_type: contentType } : {}),
           ...(lessonContext ? { lesson_context: lessonContext } : {}),
+          ...(rawCall ? { raw_call: true } : {}),
         })
       );
     },

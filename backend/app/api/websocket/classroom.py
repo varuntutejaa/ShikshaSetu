@@ -41,6 +41,20 @@ On failure at any stage (sent only to the connection whose segment failed):
 Latency is measured wall-clock from the moment the audio frame finishes
 arriving to the moment the audio response is about to be sent — never
 fabricated.
+
+Raw call mode (no STT/translate/TTS at all)
+--------------------------------------------
+A connection can opt into a plain, untranslated real-time audio relay
+instead of the AI pipeline above — useful when there's no Sarvam/LiveKit
+credentials configured yet, or when you just want it to sound like an
+actual phone call. Set `"raw_call": true` in the config message; every
+binary frame that connection sends afterwards is treated as a raw PCM16
+mono 16kHz audio chunk and is relayed as-is (not transcribed, not
+translated, not re-encoded) to every OTHER connection on this session_id
+as a binary frame: one leading byte (0 = sent by a "teacher" peer, 1 =
+sent by a "student" peer) followed by the original PCM bytes. The sender
+never gets its own audio echoed back. This mode is completely independent
+of MOCK_MODE/Sarvam/LiveKit configuration — it's a pure byte relay.
 """
 
 import base64
@@ -103,6 +117,10 @@ class AudioPeer:
         self.target_language = "sat" if role == "teacher" else "hi"
         self.content_type = "audio/webm"
         self.lesson_context: dict | None = None
+        # See module docstring "Raw call mode" — when true, binary frames
+        # from this connection bypass STT/translate/TTS entirely and are
+        # just relayed to the other peer(s) as raw audio bytes.
+        self.raw_call = False
 
     @property
     def direction(self) -> str:
@@ -165,6 +183,19 @@ class AudioSessionRegistry:
                 # on that connection's own receive loop, which unregisters it.
                 logger.debug("Could not deliver audio event to a peer in session %s", session_id)
 
+    async def broadcast_raw(self, session_id: str, sender: AudioPeer, data: bytes) -> None:
+        """Relay a raw call audio chunk to every OTHER peer — never echoed
+        back to the sender, or you'd hear your own voice looped back."""
+        speaker_byte = b"\x00" if sender.role == "teacher" else b"\x01"
+        payload = speaker_byte + data
+        for peer in self.peers(session_id):
+            if peer is sender:
+                continue
+            try:
+                await peer.websocket.send_bytes(payload)
+            except Exception:
+                logger.debug("Could not deliver raw call audio to a peer in session %s", session_id)
+
 
 audio_registry = AudioSessionRegistry()
 
@@ -205,18 +236,26 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                     peer.target_language = config.get("target_language", peer.target_language)
                     peer.content_type = config.get("content_type", peer.content_type)
                     peer.lesson_context = config.get("lesson_context", peer.lesson_context)
+                    peer.raw_call = bool(config.get("raw_call", peer.raw_call))
                     await websocket.send_json(
                         {
                             "type": "config_ack",
                             "role": peer.role,
                             "source_language": peer.source_language,
                             "target_language": peer.target_language,
+                            "raw_call": peer.raw_call,
                         }
                     )
                 continue
 
             audio_bytes = message.get("bytes")
             if not audio_bytes:
+                continue
+
+            if peer.raw_call:
+                # No STT/translate/TTS at all — see module docstring "Raw
+                # call mode". Independent of MOCK_MODE/Sarvam/LiveKit.
+                await audio_registry.broadcast_raw(session_id, peer, audio_bytes)
                 continue
 
             segment_index += 1

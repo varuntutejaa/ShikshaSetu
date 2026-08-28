@@ -25,15 +25,20 @@ def test_classroom_websocket_mock_pipeline_and_clean_disconnect() -> None:
 
 
 class _FakeWebSocket:
-    """Records every JSON payload it's asked to send — stands in for a real
-    WebSocket so AudioSessionRegistry.broadcast can be tested deterministically,
+    """Records every JSON payload (and, for raw_call, every binary frame)
+    it's asked to send — stands in for a real WebSocket so
+    AudioSessionRegistry.broadcast(_raw) can be tested deterministically,
     without going through a WebSocket transport at all."""
 
     def __init__(self) -> None:
         self.sent: list[dict] = []
+        self.sent_bytes: list[bytes] = []
 
     async def send_json(self, payload: dict) -> None:
         self.sent.append(payload)
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent_bytes.append(data)
 
 
 async def test_audio_session_registry_broadcasts_to_both_registered_peers() -> None:
@@ -104,6 +109,50 @@ def test_audio_peer_role_defaults_and_direction() -> None:
     teacher.apply_role("student")
     assert teacher.role == "student"
     assert (teacher.source_language, teacher.target_language) == ("sat", "hi")
+
+
+async def test_audio_session_registry_broadcast_raw_relays_untouched_and_skips_sender() -> None:
+    """Raw call mode: bytes go out exactly as received (no STT/translate/TTS
+    touches them), tagged with a 1-byte speaker prefix, to every OTHER peer —
+    never echoed back to whoever sent them, or they'd hear their own voice."""
+    registry = AudioSessionRegistry()
+    teacher_socket, student_socket = _FakeWebSocket(), _FakeWebSocket()
+    teacher = AudioPeer(teacher_socket, role="teacher")  # type: ignore[arg-type]
+    student = AudioPeer(student_socket, role="student")  # type: ignore[arg-type]
+    registry.register("call-session", teacher)
+    registry.register("call-session", student)
+
+    raw_pcm = b"\x01\x02\x03\x04"
+    await registry.broadcast_raw("call-session", teacher, raw_pcm)
+
+    assert teacher_socket.sent_bytes == []  # sender never gets its own audio back
+    assert student_socket.sent_bytes == [b"\x00" + raw_pcm]  # 0x00 = teacher spoke
+
+    await registry.broadcast_raw("call-session", student, raw_pcm)
+    assert student_socket.sent_bytes == [b"\x00" + raw_pcm]  # unchanged
+    assert teacher_socket.sent_bytes == [b"\x01" + raw_pcm]  # 0x01 = student spoke
+
+
+def test_classroom_websocket_raw_call_mode_bypasses_ai_pipeline() -> None:
+    """A connection that opts into raw_call gets no transcript/translation/
+    audio/latency events at all for its binary frames — just an ack
+    confirming the mode, and (with no other peer attached) silence, since
+    raw call intentionally never echoes audio back to its own sender."""
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/classroom/raw-solo-session") as websocket:
+            websocket.send_json({"type": "config", "raw_call": True})
+            ack = websocket.receive_json()
+            assert ack["type"] == "config_ack"
+            assert ack["raw_call"] is True
+
+            websocket.send_bytes(b"\x11\x22\x33\x44")  # fake raw PCM
+            # Nothing else attached to this session, so there's no receiver
+            # to relay to — confirm the socket stays healthy by sending a
+            # second, ordinary config message and getting a fresh ack back,
+            # proving the raw frame didn't crash or hang the handler.
+            websocket.send_json({"type": "config", "raw_call": True})
+            ack2 = websocket.receive_json()
+            assert ack2["type"] == "config_ack"
 
 
 def test_classroom_websocket_single_connection_still_self_delivers() -> None:

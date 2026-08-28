@@ -17,6 +17,8 @@ import {
   UserPlus,
   Users,
   Smartphone,
+  PhoneCall,
+  Ear,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,6 +60,7 @@ import {
 import { connectClassroomPresenceSocket } from "@/lib/classroom-socket";
 import { useClassroomAudio } from "@/hooks/use-classroom-audio";
 import { useClassroomVideo } from "@/hooks/use-classroom-video";
+import { useClassroomCall } from "@/hooks/use-classroom-call";
 
 // The one fixed product constraint (Hindi-speaking teacher, per the PS) —
 // not sample/mock data, so it lives here as a real constant rather than
@@ -89,6 +92,7 @@ export function LiveClassroom() {
   // linter (correctly) treat every property on it as potentially
   // ref-derived, which blocks reading any of them during render.
   const { videoRef, ...video } = useClassroomVideo();
+  const call = useClassroomCall();
   const sessionIdRef = useRef<string | null>(null);
   const presenceRef = useRef<(WebSocket & { setContent?: (lessonId: string | null, slideIndex: number) => void }) | null>(null);
 
@@ -186,11 +190,14 @@ export function LiveClassroom() {
         learning_objectives: [],
       };
 
-      // Two independent pipelines, started in parallel — a failure in one
-      // (e.g. video unconfigured) never blocks or affects the other.
+      // Three independent pipelines, started in parallel — a failure in one
+      // (e.g. video unconfigured) never blocks or affects the others. The
+      // raw call needs no Sarvam/LiveKit credentials at all — it's a plain
+      // audio relay through the backend that's already deployed.
       await Promise.all([
         audio.start(session.session_id, session.teacher_language, session.student_language, context),
         video.start(session.session_id),
+        call.start(session.session_id, "teacher"),
       ]);
     } catch (err) {
       setSessionError(
@@ -204,6 +211,7 @@ export function LiveClassroom() {
   async function handleEndClass() {
     audio.stop();
     video.stop();
+    call.stop();
     presenceRef.current?.close();
     presenceRef.current = null;
     if (sessionIdRef.current) {
@@ -323,6 +331,37 @@ export function LiveClassroom() {
               : video.status === "connecting"
                 ? "Video Connecting…"
                 : video.statusMessage ?? "Video Off"}
+          </Badge>
+          <Badge
+            variant="outline"
+            className={cn(
+              "gap-1.5 py-1.5 px-3",
+              call.status === "live"
+                ? call.remoteSpeaking
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-success/25 bg-success/10 text-success"
+                : call.status === "connecting" || call.status === "reconnecting"
+                  ? "border-warning/30 bg-warning/10 text-warning-foreground"
+                  : "border-border bg-muted/40 text-muted-foreground"
+            )}
+            title="Raw, untranslated real-time audio — no Sarvam AI, sounds like a phone call"
+          >
+            {call.remoteSpeaking ? (
+              <Ear className="h-3.5 w-3.5 animate-pulse" />
+            ) : (
+              <PhoneCall className="h-3.5 w-3.5" />
+            )}
+            {call.status === "live"
+              ? call.remoteSpeaking === "student"
+                ? "Live Call · Student Speaking"
+                : call.remoteSpeaking === "teacher"
+                  ? "Live Call · You're Speaking"
+                  : "Live Call Connected"
+              : call.status === "connecting"
+                ? "Live Call Connecting…"
+                : call.status === "reconnecting"
+                  ? "Live Call Reconnecting…"
+                  : "Live Call Off"}
           </Badge>
           <Sheet>
             <SheetTrigger asChild>
@@ -515,6 +554,12 @@ export function LiveClassroom() {
         <div className="rounded-lg border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-warning-foreground flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           {audio.errorMessage}
+        </div>
+      )}
+      {call.errorMessage && (
+        <div className="rounded-lg border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-sm text-warning-foreground flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {call.errorMessage}
         </div>
       )}
 
