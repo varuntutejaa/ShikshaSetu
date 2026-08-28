@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   UserPlus,
   Users,
+  Smartphone,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +39,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Waveform } from "@/components/live-class/waveform";
 import { cn } from "@/lib/utils";
-import { TODAY_CLASS } from "@/lib/mock-data";
+import { CLASSES, SUBJECTS } from "@/lib/mock-data";
 import {
   ApiError,
   Classroom,
@@ -54,11 +55,19 @@ import {
   setClassroomContent,
   startClassroom,
 } from "@/lib/api";
-import { connectClassroomPresenceSocket, connectClassroomSocket } from "@/lib/classroom-socket";
+import { connectClassroomPresenceSocket } from "@/lib/classroom-socket";
 import { useClassroomAudio } from "@/hooks/use-classroom-audio";
 import { useClassroomVideo } from "@/hooks/use-classroom-video";
 
+// The one fixed product constraint (Hindi-speaking teacher, per the PS) —
+// not sample/mock data, so it lives here as a real constant rather than
+// coming from the dashboard's demo dataset.
+const TEACHER_LANGUAGE = "Hindi";
+
 export function LiveClassroom() {
+  const [className, setClassName] = useState("");
+  const [grade, setGrade] = useState("Class 2");
+  const [subjectFocus, setSubjectFocus] = useState("Mathematics");
   const [studentLanguage, setStudentLanguage] = useState("Santhali");
   const [showTranscript, setShowTranscript] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -73,7 +82,6 @@ export function LiveClassroom() {
   const [lessonId, setLessonId] = useState("");
   const [lessonContext, setLessonContext] = useState<Record<string, unknown> | null>(null);
   const [slideIndex, setSlideIndex] = useState(0);
-  const [simulatingStudent, setSimulatingStudent] = useState(false);
 
   const audio = useClassroomAudio();
   // Destructure the ref out separately from the rest of the hook's return —
@@ -117,18 +125,23 @@ export function LiveClassroom() {
     listClassroomParticipants(sessionId).then(setParticipants).catch(() => {});
   }
 
+  function buildClassInput() {
+    const gradeNumber = Number(grade.replace(/\D/g, "")) || 1;
+    return {
+      name: className.trim() || `${grade} ${subjectFocus}`,
+      grade: gradeNumber,
+      section: undefined,
+      subject_focus: subjectFocus,
+      teacher_language: LANGUAGE_NAME_TO_CODE[TEACHER_LANGUAGE] ?? "hi",
+      student_language: LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat",
+    };
+  }
+
   async function handleCreateClass() {
     setCreatingClass(true);
     setSessionError(null);
     try {
-      const created = await createClassroom({
-        name: `${TODAY_CLASS.class} ${TODAY_CLASS.subject}`,
-        grade: 2,
-        section: "A",
-        subject_focus: TODAY_CLASS.subject,
-        teacher_language: LANGUAGE_NAME_TO_CODE[TODAY_CLASS.teacherLanguage] ?? "hi",
-        student_language: LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat",
-      });
+      const created = await createClassroom(buildClassInput());
       setClassroom(created);
       setJoinCode(created.class_code);
     } catch (err) {
@@ -159,22 +172,16 @@ export function LiveClassroom() {
     setStarting(true);
     setSessionError(null);
     try {
-      const classForSession = classroom ?? await createClassroom({
-        name: `${TODAY_CLASS.class} ${TODAY_CLASS.subject}`,
-        grade: 2,
-        section: "A",
-        subject_focus: TODAY_CLASS.subject,
-        teacher_language: LANGUAGE_NAME_TO_CODE[TODAY_CLASS.teacherLanguage] ?? "hi",
-        student_language: LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat",
-      });
+      const classForSession = classroom ?? (await createClassroom(buildClassInput()));
       setClassroom(classForSession);
+      setJoinCode(classForSession.class_code);
       const session = await startClassroom(classForSession.id);
       sessionIdRef.current = session.session_id;
       openPresence(session.session_id);
       const context = lessonContext ?? {
-        class: classForSession.name ?? TODAY_CLASS.class,
-        subject: TODAY_CLASS.subject,
-        topic: TODAY_CLASS.topic,
+        class: classForSession.name,
+        subject: classForSession.subject_focus,
+        topic: classForSession.subject_focus,
         activity: "Live classroom explanation",
         learning_objectives: [],
       };
@@ -248,79 +255,13 @@ export function LiveClassroom() {
     }
   }
 
-  /**
-   * Exercises the real student -> teacher leg of the two-way pipeline
-   * without a second physical device: opens a genuinely separate WebSocket
-   * connection to the SAME session with role="student" (exactly what the
-   * Android app would do), sends one short mock audio segment, and closes.
-   * Because the backend broadcasts to every connection attached to the
-   * session, the teacher's own persistent connection (above) receives the
-   * resulting transcript/translation/audio/latency events automatically —
-   * this is not a UI simulation, it's a real round trip through the same
-   * backend pipeline a real second device would use. Clearly labeled as a
-   * mock-audio test since no physical microphone is used for it.
-   */
-  async function handleSimulateStudentReply() {
-    if (!sessionIdRef.current || simulatingStudent) return;
-    setSimulatingStudent(true);
-    const studentLanguageCode = LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat";
-    const teacherLanguageCode = LANGUAGE_NAME_TO_CODE[TODAY_CLASS.teacherLanguage] ?? "hi";
-
-    // The teacher's own mic keeps sending a new segment every ~3.5s while
-    // listening, and both directions currently share one display slot — so
-    // without pausing it, the teacher's next real segment overwrites the
-    // simulated student's reply within a second or two, making the result
-    // look like nothing happened. Muting stops new outgoing segments (the
-    // connection itself stays open) for the few seconds it takes to see it.
-    const wasMuted = audio.muted;
-    audio.setMuted(true);
-
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-      const socket = connectClassroomSocket(sessionIdRef.current!, {
-        onOpen: () => {
-          socket.sendConfig("student", studentLanguageCode, teacherLanguageCode, "audio/wav", lessonContext ?? undefined);
-          // A short placeholder blob, not a real recording — MOCK_MODE
-          // returns a deterministic transcript regardless of audio content;
-          // this button only produces a meaningful result in mock mode.
-          setTimeout(() => socket.sendAudioSegment(new Blob([new Uint8Array(256)], { type: "audio/wav" })), 150);
-        },
-        onEvent: (event) => {
-          if (event.type === "latency") {
-            setTimeout(() => {
-              socket.close();
-              finish();
-            }, 150);
-          }
-          if (event.type === "error") {
-            socket.close();
-            finish();
-          }
-        },
-        onClose: finish,
-        onSocketError: finish,
-      });
-      setTimeout(finish, 10000); // safety timeout so the button never gets stuck
-    });
-
-    // Hold the mute a little longer so the reply stays on screen (matching
-    // the panels' own HOLD_AFTER_DELIVERED_MS) instead of unmuting the
-    // instant the round trip finishes and immediately triggering a new
-    // teacher segment that overwrites it again.
-    setTimeout(() => audio.setMuted(wasMuted), 2600);
-    setSimulatingStudent(false);
-  }
-
-  // Both panels are driven by the backend's broadcast events now, not a
-  // manual "who's speaking" toggle — teacher_to_student fills these in when
-  // the teacher speaks, student_to_teacher fills them in (via a *different*
-  // physical device, e.g. the Android app, attached to the same session_id)
-  // when the student speaks. See useClassroomAudio's direction handling.
+  // Both panels are driven entirely by the backend's broadcast events — the
+  // teacher's own persistent connection (role="teacher") receives BOTH
+  // directions on the same session_id: teacher_to_student fills these in
+  // when the teacher speaks, student_to_teacher fills them in the moment a
+  // real separate device (the Android app, connected with role="student" to
+  // this same session via the class code below) speaks. No simulation, no
+  // manual toggle — whatever a real second device sends shows up here live.
   const isTeacherTextVisible = listening && audio.phase !== "idle" && !!audio.teacherText;
   const isStudentTextVisible = listening && audio.phase !== "idle" && !!audio.studentText;
 
@@ -333,7 +274,9 @@ export function LiveClassroom() {
             Live Classroom
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {TODAY_CLASS.class} · {TODAY_CLASS.subject} · {TODAY_CLASS.teacherLanguage} → {studentLanguage}
+            {classroom
+              ? `${classroom.name ?? `${grade} ${subjectFocus}`} · ${TEACHER_LANGUAGE} → ${studentLanguage}`
+              : `No class started yet · ${TEACHER_LANGUAGE} → ${studentLanguage}`}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -444,44 +387,94 @@ export function LiveClassroom() {
         </div>
       )}
 
-      <div className="rounded-xl border border-border bg-card p-4 grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-        <div>
-          <Label htmlFor="join-code" className="text-sm font-medium">
-            Class Code
-          </Label>
-          <Input
-            id="join-code"
-            value={joinCode}
-            onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-            placeholder="Enter or create code"
-            className="mt-1"
-          />
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <Label htmlFor="class-name" className="text-sm font-medium">
+              Class Name
+            </Label>
+            <Input
+              id="class-name"
+              value={className}
+              onChange={(event) => setClassName(event.target.value)}
+              placeholder="e.g. Morning Batch"
+              disabled={!!classroom || listening}
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label className="text-sm font-medium">Grade</Label>
+            <Select value={grade} onValueChange={setGrade} disabled={!!classroom || listening}>
+              <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {CLASSES.map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-sm font-medium">Subject</Label>
+            <Select value={subjectFocus} onValueChange={setSubjectFocus} disabled={!!classroom || listening}>
+              <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SUBJECTS.map((s) => (
+                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-        <div>
-          <Label htmlFor="student-name" className="text-sm font-medium">
-            Student Name
-          </Label>
-          <Input
-            id="student-name"
-            value={studentName}
-            onChange={(event) => setStudentName(event.target.value)}
-            placeholder="For join flow"
-            className="mt-1"
-          />
+
+        <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+          <div>
+            <Label htmlFor="join-code" className="text-sm font-medium">
+              Class Code
+            </Label>
+            <Input
+              id="join-code"
+              value={joinCode}
+              onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
+              placeholder="Enter a code to join another class"
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label htmlFor="student-name" className="text-sm font-medium">
+              Your Name (for join flow)
+            </Label>
+            <Input
+              id="student-name"
+              value={studentName}
+              onChange={(event) => setStudentName(event.target.value)}
+              placeholder="Only used when joining"
+              className="mt-1"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleCreateClass} disabled={creatingClass || !!classroom || listening} className="gap-2">
+              <UserPlus className="h-4 w-4" />
+              {creatingClass ? "Creating…" : "Create Class"}
+            </Button>
+            <Button onClick={handleJoinClass} disabled={joiningClass || !joinCode || listening} variant="outline">
+              {joiningClass ? "Joining…" : "Join Class"}
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={handleCreateClass} disabled={creatingClass || listening} className="gap-2">
-            <UserPlus className="h-4 w-4" />
-            {creatingClass ? "Creating…" : "Create Class"}
-          </Button>
-          <Button onClick={handleJoinClass} disabled={joiningClass || !joinCode || listening} variant="outline">
-            {joiningClass ? "Joining…" : "Join Class"}
-          </Button>
-        </div>
+
         {classroom && (
-          <p className="text-sm text-muted-foreground md:col-span-3">
-            {classroom.name ?? TODAY_CLASS.class} · Code <span className="font-semibold text-foreground">{classroom.class_code}</span>
-          </p>
+          <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/[0.04] px-3.5 py-3">
+            <Smartphone className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+            <p className="text-sm text-foreground">
+              {classroom.name} · Code{" "}
+              <span className="font-semibold text-primary">{classroom.class_code}</span>
+              <br />
+              <span className="text-muted-foreground">
+                Enter this code in the Android app&apos;s &quot;Join Class&quot; screen once the class is
+                started — the app connects to this exact same live session for real two-way voice.
+              </span>
+            </p>
+          </div>
         )}
       </div>
 
@@ -511,16 +504,6 @@ export function LiveClassroom() {
         </div>
         <div className="lg:col-span-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <Badge variant="secondary">Slide {slideIndex + 1}</Badge>
-          <Button
-            onClick={handleSimulateStudentReply}
-            variant="outline"
-            size="sm"
-            disabled={!listening || simulatingStudent}
-            className="gap-1.5"
-          >
-            <Users className="h-3.5 w-3.5" />
-            {simulatingStudent ? "Simulating…" : "Simulate Student Reply (mock audio)"}
-          </Button>
           {lessonContext && (
             <span>
               Context: {String(lessonContext.subject)} · {String(lessonContext.topic)}
@@ -614,7 +597,7 @@ export function LiveClassroom() {
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm font-semibold text-foreground">Teacher Speech</p>
             <Badge variant="secondary" className="font-normal">
-              {TODAY_CLASS.teacherLanguage}
+              {TEACHER_LANGUAGE}
             </Badge>
           </div>
           <div className="flex-1 flex items-center">
