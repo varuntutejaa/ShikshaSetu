@@ -266,6 +266,15 @@ export function LiveClassroom() {
     const studentLanguageCode = LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat";
     const teacherLanguageCode = LANGUAGE_NAME_TO_CODE[TODAY_CLASS.teacherLanguage] ?? "hi";
 
+    // The teacher's own mic keeps sending a new segment every ~3.5s while
+    // listening, and both directions currently share one display slot — so
+    // without pausing it, the teacher's next real segment overwrites the
+    // simulated student's reply within a second or two, making the result
+    // look like nothing happened. Muting stops new outgoing segments (the
+    // connection itself stays open) for the few seconds it takes to see it.
+    const wasMuted = audio.muted;
+    audio.setMuted(true);
+
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -299,6 +308,11 @@ export function LiveClassroom() {
       setTimeout(finish, 10000); // safety timeout so the button never gets stuck
     });
 
+    // Hold the mute a little longer so the reply stays on screen (matching
+    // the panels' own HOLD_AFTER_DELIVERED_MS) instead of unmuting the
+    // instant the round trip finishes and immediately triggering a new
+    // teacher segment that overwrites it again.
+    setTimeout(() => audio.setMuted(wasMuted), 2600);
     setSimulatingStudent(false);
   }
 
