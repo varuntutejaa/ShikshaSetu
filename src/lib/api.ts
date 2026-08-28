@@ -77,6 +77,7 @@ export interface TranslationResult {
   source_language: string;
   target_language: string;
   provider: string;
+  context_used?: Record<string, unknown> | null;
 }
 
 export interface GeneratedLesson {
@@ -92,16 +93,18 @@ export interface GeneratedLesson {
   mother_tongue_script: string;
   activity: string;
   assessment_topics: string[];
+  downloadable: boolean;
   created_at: string;
 }
 
 export interface LessonContent {
   id: string;
   lesson_id: string;
-  content_type: "audio" | "worksheet";
+  content_type: "audio" | "worksheet" | "flashcards";
   language: string;
   text_content: string | null;
   audio_url: string | null;
+  metadata_json?: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -211,11 +214,12 @@ export interface SyncResult {
 export function translateText(
   text: string,
   sourceLanguage: string,
-  targetLanguage: string
+  targetLanguage: string,
+  context?: Record<string, unknown>
 ): Promise<TranslationResult> {
   return apiFetch<TranslationResult>("/api/translation", {
     method: "POST",
-    body: JSON.stringify({ text, source_language: sourceLanguage, target_language: targetLanguage }),
+    body: JSON.stringify({ text, source_language: sourceLanguage, target_language: targetLanguage, context }),
   });
 }
 
@@ -277,6 +281,33 @@ export function generateLessonWorksheet(lessonId: string, language = "hi"): Prom
   return apiFetch<LessonContent>(`/api/lessons/${lessonId}/worksheet?language=${language}`, {
     method: "POST",
   });
+}
+
+export function generateLessonFlashcards(lessonId: string, language = "sat"): Promise<LessonContent> {
+  return apiFetch<LessonContent>(`/api/lessons/${lessonId}/flashcards?language=${language}`, {
+    method: "POST",
+  });
+}
+
+export function setLessonDownloadable(lessonId: string, downloadable = true): Promise<GeneratedLesson> {
+  return apiFetch<GeneratedLesson>(`/api/lessons/${lessonId}/downloadable`, {
+    method: "PATCH",
+    body: JSON.stringify({ downloadable }),
+  });
+}
+
+export function getOfflinePack(lessonId: string): Promise<Record<string, unknown>> {
+  return apiFetch<Record<string, unknown>>(`/api/lessons/${lessonId}/offline-pack`);
+}
+
+export function generateTeachingPack(lessonId: string): Promise<{
+  lesson: GeneratedLesson;
+  content: LessonContent[];
+  quiz_id: string | null;
+  viva_seed: Record<string, unknown>;
+  offline_manifest: Record<string, unknown>;
+}> {
+  return apiFetch(`/api/lessons/${lessonId}/teaching-pack`, { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +409,163 @@ export function syncEvents(studentId: string, events: SyncEventIn[]): Promise<Sy
   return apiFetch<SyncResult>("/api/sync", {
     method: "POST",
     body: JSON.stringify({ student_id: studentId, events }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Classroom session + LiveKit video token
+//
+// Purely metadata/signaling — no video ever flows through this backend or
+// this API client. The token minted here is short-lived and scoped
+// (teacher can publish, student can only subscribe); the LiveKit API secret
+// never leaves the backend.
+// ---------------------------------------------------------------------------
+
+export interface ClassSession {
+  session_id: string;
+  teacher_id: string | null;
+  class_id: string | null;
+  teacher_language: string;
+  student_language: string;
+  status: "active" | "ended";
+  lesson_id: string | null;
+  current_slide_index: number;
+  created_at: string;
+  ended_at: string | null;
+}
+
+export interface Classroom {
+  id: string;
+  teacher_id: string | null;
+  name: string | null;
+  class_code: string;
+  grade: number;
+  section: string | null;
+  subject_focus: string | null;
+  teacher_language: string;
+  student_language: string;
+  created_at: string;
+}
+
+export interface ClassroomParticipant {
+  id: string;
+  session_id: string;
+  student_id: string | null;
+  participant_type: "teacher" | "student" | string;
+  display_name: string;
+  status: "online" | "offline" | string;
+  joined_at: string;
+  left_at: string | null;
+}
+
+export interface ClassSessionInput {
+  teacher_id?: string;
+  class_id?: string;
+  teacher_language: string;
+  student_language: string;
+}
+
+export interface ClassroomInput {
+  teacher_id?: string;
+  name: string;
+  grade: number;
+  section?: string;
+  subject_focus?: string;
+  teacher_language: string;
+  student_language: string;
+}
+
+export type ParticipantType = "teacher" | "student";
+
+export interface LiveKitTokenResult {
+  token: string;
+  url: string;
+  room: string;
+}
+
+export function createClassroomSession(input: ClassSessionInput): Promise<ClassSession> {
+  return apiFetch<ClassSession>("/api/classroom/session", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function createClassroom(input: ClassroomInput): Promise<Classroom> {
+  return apiFetch<Classroom>("/api/classroom/classes", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function joinClassroom(
+  classCode: string,
+  studentId?: string,
+  displayName?: string
+): Promise<{ classroom: Classroom; active_session: ClassSession | null }> {
+  return apiFetch("/api/classroom/classes/join", {
+    method: "POST",
+    body: JSON.stringify({ class_code: classCode, student_id: studentId, display_name: displayName }),
+  });
+}
+
+export function startClassroom(classId: string): Promise<ClassSession> {
+  return apiFetch<ClassSession>(`/api/classroom/classes/${classId}/start`, { method: "POST" });
+}
+
+export function listClassroomSessions(classId?: string, status?: "active" | "ended"): Promise<ClassSession[]> {
+  const params = new URLSearchParams();
+  if (classId) params.set("class_id", classId);
+  if (status) params.set("status", status);
+  const query = params.toString();
+  return apiFetch<ClassSession[]>(`/api/classroom/sessions${query ? `?${query}` : ""}`);
+}
+
+export function listClassroomParticipants(sessionId: string): Promise<ClassroomParticipant[]> {
+  return apiFetch<ClassroomParticipant[]>(`/api/classroom/session/${sessionId}/participants`);
+}
+
+export function setClassroomContent(
+  sessionId: string,
+  lessonId: string | null,
+  slideIndex: number
+): Promise<{
+  session_id: string;
+  lesson_id: string | null;
+  current_slide_index: number;
+  offline_pack: Record<string, unknown> | null;
+}> {
+  return apiFetch(`/api/classroom/session/${sessionId}/content`, {
+    method: "POST",
+    body: JSON.stringify({ lesson_id: lessonId, slide_index: slideIndex }),
+  });
+}
+
+export function getStudentLearningInsights(studentId: string): Promise<{
+  weak_concepts: { concept: string; average_score: number }[];
+  strengths: { concept: string; average_score: number }[];
+  recommendation: string;
+  intervention_activity: { duration_minutes: number; language: string; activity: string } | null;
+  source: string;
+}> {
+  return apiFetch(`/api/students/${studentId}/learning-insights`);
+}
+
+export function getClassroomMetrics(classId?: string): Promise<Record<string, unknown>> {
+  return apiFetch(`/api/classroom/metrics${classId ? `?class_id=${classId}` : ""}`);
+}
+
+export function endClassroomSession(sessionId: string): Promise<ClassSession> {
+  return apiFetch<ClassSession>(`/api/classroom/session/${sessionId}/end`, { method: "POST" });
+}
+
+export function getLiveKitToken(
+  sessionId: string,
+  participantType: ParticipantType,
+  identity?: string
+): Promise<LiveKitTokenResult> {
+  return apiFetch<LiveKitTokenResult>("/api/classroom/livekit-token", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, participant_type: participantType, identity }),
   });
 }
 

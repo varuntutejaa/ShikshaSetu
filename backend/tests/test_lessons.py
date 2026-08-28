@@ -58,3 +58,24 @@ async def test_generate_lesson_audio_and_worksheet(client):
     assert worksheet_response.status_code == 200
     assert worksheet_response.json()["content_type"] == "worksheet"
     assert worksheet_response.json()["text_content"]
+
+
+async def test_flashcards_teaching_pack_and_offline_manifest(client):
+    lesson = (
+        await client.post(
+            "/api/lessons/generate",
+            json={"grade": 2, "subject": "Mathematics", "topic": "Addition", "teacher_language": "hi", "student_language": "sat"},
+        )
+    ).json()
+
+    flashcards = await client.post(f"/api/lessons/{lesson['id']}/flashcards?language=sat")
+    assert flashcards.status_code == 200
+    assert flashcards.json()["content_type"] == "flashcards"
+    assert flashcards.json()["metadata_json"]["cards"]
+
+    pack = await client.post(f"/api/lessons/{lesson['id']}/teaching-pack")
+    assert pack.status_code == 200
+    body = pack.json()
+    assert body["quiz_id"]
+    assert body["offline_manifest"]["downloadable"] is True
+    assert body["offline_manifest"]["slides"]

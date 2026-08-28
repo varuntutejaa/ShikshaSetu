@@ -13,6 +13,8 @@ class ClassModel(Base, UUIDPKMixin, TimestampMixin):
     teacher_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("teachers.id", ondelete="SET NULL"), nullable=True
     )
+    name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    class_code: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)
     grade: Mapped[int] = mapped_column(Integer, nullable=False)
     section: Mapped[str | None] = mapped_column(String(16), nullable=True)
     subject_focus: Mapped[str | None] = mapped_column(String(120), nullable=True)

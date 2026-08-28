@@ -7,6 +7,7 @@ mother-tongue script -> save -> return lesson.
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
@@ -39,7 +40,16 @@ class LessonService:
 
         teacher_script = draft["teacher_script"]
         translation = await self._translator.translate(
-            teacher_script, request.teacher_language, request.student_language
+            teacher_script,
+            request.teacher_language,
+            request.student_language,
+            {
+                "class": f"Class {request.grade}",
+                "subject": request.subject,
+                "topic": request.topic,
+                "activity": draft.get("activity", ""),
+                "learning_objectives": draft.get("learning_objectives", []),
+            },
         )
 
         lesson = Lesson(
@@ -62,7 +72,11 @@ class LessonService:
         return lesson
 
     async def get(self, db: AsyncSession, lesson_id: uuid.UUID) -> Lesson:
-        lesson = await db.get(Lesson, lesson_id)
+        result = await db.execute(
+            select(Lesson).where(Lesson.id == lesson_id).options(selectinload(Lesson.content_items))
+            .options(selectinload(Lesson.quizzes))
+        )
+        lesson = result.scalar_one_or_none()
         if lesson is None:
             raise NotFoundError(f"Lesson {lesson_id} not found")
         return lesson
@@ -94,6 +108,58 @@ class LessonService:
         await db.commit()
         await db.refresh(content)
         return content
+
+    async def generate_flashcards(
+        self, db: AsyncSession, lesson_id: uuid.UUID, language: str
+    ) -> LessonContent:
+        lesson = await self.get(db, lesson_id)
+        terms = (lesson.assessment_topics or [lesson.topic])[:6]
+        cards = [
+            {
+                "front": term,
+                "back": f"{term}: child-friendly example from {lesson.topic}",
+                "visual_prompt": f"Simple classroom flashcard for {term}, grade {lesson.grade}",
+            }
+            for term in terms
+        ]
+        content = LessonContent(
+            lesson_id=lesson.id,
+            content_type="flashcards",
+            language=language,
+            text_content="\n".join(f"{c['front']} - {c['back']}" for c in cards),
+            metadata_json={"cards": cards},
+        )
+        db.add(content)
+        await db.commit()
+        await db.refresh(content)
+        return content
+
+    async def set_downloadable(self, db: AsyncSession, lesson_id: uuid.UUID, downloadable: bool) -> Lesson:
+        lesson = await self.get(db, lesson_id)
+        lesson.downloadable = downloadable
+        await db.commit()
+        await db.refresh(lesson)
+        return lesson
+
+    async def offline_pack(self, db: AsyncSession, lesson_id: uuid.UUID) -> dict:
+        lesson = await self.get(db, lesson_id)
+        return {
+            "lesson_id": str(lesson.id),
+            "downloadable": lesson.downloadable,
+            "slides": [
+                {"index": 0, "title": lesson.topic, "body": lesson.teacher_script},
+                {"index": 1, "title": "Mother-tongue support", "body": lesson.mother_tongue_script},
+                {"index": 2, "title": "Activity", "body": lesson.activity},
+            ],
+            "worksheets": [c.text_content for c in lesson.content_items if c.content_type == "worksheet"],
+            "flashcards": [
+                (c.metadata_json or {}).get("cards", []) for c in lesson.content_items if c.content_type == "flashcards"
+            ],
+            "activities": [lesson.activity],
+            "audio": [c.audio_url for c in lesson.content_items if c.content_type == "audio" and c.audio_url],
+            "quizzes": [{"id": str(q.id), "title": q.title} for q in lesson.quizzes],
+            "sync": {"endpoint": "/api/sync", "mode": "queue_until_online"},
+        }
 
     async def generate_worksheet(
         self, db: AsyncSession, lesson_id: uuid.UUID, language: str

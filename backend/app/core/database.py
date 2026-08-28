@@ -1,16 +1,27 @@
 """Async SQLAlchemy 2.x engine, session factory and declarative base."""
 
 from collections.abc import AsyncGenerator
+from uuid import uuid4
 
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
+connect_args = {}
+engine_kwargs = {}
+if "pooler.supabase.com" in settings.database_url:
+    connect_args["statement_cache_size"] = 0
+    connect_args["prepared_statement_name_func"] = lambda: f"__asyncpg_{uuid4()}__"
+    engine_kwargs["poolclass"] = NullPool
+
 engine = create_async_engine(
     settings.database_url,
     echo=False,
     pool_pre_ping=True,
+    connect_args=connect_args,
+    **engine_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(

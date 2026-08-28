@@ -14,7 +14,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { RiskBadge, StatusBadge } from "@/components/shared/status-badge";
-import { STUDENTS, ASSESSMENT_HISTORY } from "@/lib/mock-data";
+import { STUDENTS, ASSESSMENT_HISTORY, STUDENT_BACKEND_IDS } from "@/lib/mock-data";
+import { API_BASE_URL } from "@/lib/api";
 
 export default async function StudentProfilePage({
   params,
@@ -24,6 +25,23 @@ export default async function StudentProfilePage({
   if (!student) notFound();
 
   const history = ASSESSMENT_HISTORY.filter((a) => a.studentId === student.id);
+  const backendId = STUDENT_BACKEND_IDS[student.id];
+  let liveInsights: {
+    weak_concepts: { concept: string; average_score: number }[];
+    strengths: { concept: string; average_score: number }[];
+    recommendation: string;
+    intervention_activity: { activity: string } | null;
+  } | null = null;
+  if (backendId) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/students/${backendId}/learning-insights`, {
+        cache: "no-store",
+      });
+      if (response.ok) liveInsights = await response.json();
+    } catch {
+      liveInsights = null;
+    }
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
@@ -115,9 +133,9 @@ export default async function StudentProfilePage({
         <div className="space-y-6">
           <div className="rounded-xl border border-border bg-card p-5">
             <h3 className="font-semibold text-foreground mb-3">Weak Concepts</h3>
-            {student.weakConcepts.length > 0 ? (
+            {(liveInsights?.weak_concepts.length || student.weakConcepts.length) > 0 ? (
               <div className="flex flex-wrap gap-2">
-                {student.weakConcepts.map((c) => (
+                {(liveInsights?.weak_concepts.map((w) => `${w.concept} ${w.average_score}%`) ?? student.weakConcepts).map((c) => (
                   <Badge
                     key={c}
                     variant="outline"
@@ -132,11 +150,27 @@ export default async function StudentProfilePage({
             )}
           </div>
 
+          {liveInsights?.strengths && liveInsights.strengths.length > 0 && (
+            <div className="rounded-xl border border-border bg-card p-5">
+              <h3 className="font-semibold text-foreground mb-3">Strengths</h3>
+              <div className="flex flex-wrap gap-2">
+                {liveInsights.strengths.map((s) => (
+                  <Badge key={s.concept} variant="outline" className="border-success/20 bg-success/10 text-success font-medium">
+                    {s.concept} {s.average_score}%
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="rounded-xl border border-info/30 bg-info/10 p-5 flex gap-3">
             <Lightbulb className="h-5 w-5 text-info shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-info">AI Recommendation</p>
-              <p className="text-sm text-info/90 mt-0.5">{student.aiRecommendation}</p>
+              <p className="text-sm text-info/90 mt-0.5">{liveInsights?.recommendation ?? student.aiRecommendation}</p>
+              {liveInsights?.intervention_activity && (
+                <p className="text-xs text-info/80 mt-2">{liveInsights.intervention_activity.activity}</p>
+              )}
             </div>
           </div>
         </div>

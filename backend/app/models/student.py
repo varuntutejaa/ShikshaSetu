@@ -14,6 +14,15 @@ class Student(Base, UUIDPKMixin, TimestampMixin):
     class_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("classes.id", ondelete="SET NULL"), nullable=True
     )
+
+    # --- Login credentials --------------------------------------------------
+    # Nullable: students created before auth existed (or by a teacher flow
+    # that hasn't set a password yet) simply can't log in until these are
+    # set — see app/services/auth_service.py. Never nullable=False here: a
+    # live deployment may already have rows without credentials, and a
+    # NOT NULL migration would fail against them.
+    student_code: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mother_tongue: Mapped[str] = mapped_column(String(8), default="sat", nullable=False)
     grade: Mapped[int] = mapped_column(Integer, nullable=False)
     school: Mapped[str | None] = mapped_column(String(255), nullable=True)

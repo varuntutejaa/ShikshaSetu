@@ -7,6 +7,7 @@ class TranslationRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=4000)
     source_language: str = Field(..., examples=["hi"])
     target_language: str = Field(..., examples=["sat"])
+    context: dict | None = Field(default=None, description="Lesson/classroom context for educational translation")
 
     @field_validator("source_language", "target_language")
     @classmethod
@@ -22,3 +23,4 @@ class TranslationResponse(BaseModel):
     source_language: str
     target_language: str
     provider: str
+    context_used: dict | None = None

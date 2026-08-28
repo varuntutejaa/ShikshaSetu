@@ -28,3 +28,23 @@ async def test_translate_ho_falls_back_to_mock_provider(client):
     )
     assert response.status_code == 200
     assert response.json()["provider"] == "mock"
+
+
+async def test_translation_accepts_lesson_context(client):
+    response = await client.post(
+        "/api/translation",
+        json={
+            "text": "तीन और दो जोड़ो",
+            "source_language": "hi",
+            "target_language": "sat",
+            "context": {
+                "class": "Class 2",
+                "subject": "Mathematics",
+                "topic": "Addition",
+                "activity": "Use stones",
+                "learning_objectives": ["Add numbers up to 20"],
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["context_used"]["topic"] == "Addition"

@@ -69,3 +69,32 @@ class UpstreamTimeoutError(AppError):
 class DatabaseError(AppError):
     code = "DATABASE_ERROR"
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+class UnauthorizedError(AppError):
+    code = "UNAUTHORIZED"
+    status_code = status.HTTP_401_UNAUTHORIZED
+
+
+class ForbiddenError(AppError):
+    code = "FORBIDDEN"
+    status_code = status.HTTP_403_FORBIDDEN
+
+
+class ConflictError(AppError):
+    code = "CONFLICT"
+    status_code = status.HTTP_409_CONFLICT
+
+
+class VideoNotConfiguredError(AppError):
+    """LiveKit credentials are missing — video is a separate, optional
+    pipeline from AI audio translation, so this is never a fatal error for
+    the classroom as a whole (see app/api/routes/classroom.py)."""
+
+    code = "LIVEKIT_NOT_CONFIGURED"
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+class ClassSessionEndedError(AppError):
+    code = "CLASS_SESSION_ENDED"
+    status_code = status.HTTP_409_CONFLICT

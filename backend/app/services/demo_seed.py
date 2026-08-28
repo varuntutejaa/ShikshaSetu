@@ -4,15 +4,44 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from app.core.security import hash_password
 from app.models import ClassModel, Lesson, Quiz, QuizQuestion, Student, Teacher
 
 DEMO_TEACHER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 DEMO_CLASS_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 DEMO_STUDENT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+# --- Demo login credentials --------------------------------------------------
+# Clearly-marked demo-only credentials, seeded so the Android login screen has
+# something to test against. Never used in a real deployment with real
+# students — see README "Demo student logins".
+DEMO_PASSWORD = "student123"  # noqa: S105 - intentional demo credential, not a secret
+DEMO_LOGIN_STUDENTS = [
+    {
+        "id": uuid.UUID("00000000-0000-0000-0000-000000000006"),
+        "code": "STU1001",
+        "name": "Sita Hansda",
+        "points": 90,
+        "streak_days": 2,
+        "attendance": 88.0,
+        "reading_score": 70.0,
+        "numeracy_score": 65.0,
+        "vocabulary_score": 72.0,
+    },
+    {
+        "id": uuid.UUID("00000000-0000-0000-0000-000000000007"),
+        "code": "STU1002",
+        "name": "Amit Murmu",
+        "points": 150,
+        "streak_days": 6,
+        "attendance": 95.0,
+        "reading_score": 85.0,
+        "numeracy_score": 90.0,
+        "vocabulary_score": 80.0,
+    },
+]
 
 
 DEMO_LESSONS = [
@@ -25,9 +54,10 @@ DEMO_LESSONS = [
 
 
 async def seed_demo_data(db: AsyncSession) -> None:
-    existing = await db.get(Student, DEMO_STUDENT_ID)
-    if existing is not None:
-        return
+    """Idempotent: safe to call on every startup. Creates each demo entity
+    only if missing, and backfills login credentials onto a pre-existing
+    demo student that predates auth (e.g. an already-deployed database)."""
+    password_hash = hash_password(DEMO_PASSWORD)
 
     teacher = await db.get(Teacher, DEMO_TEACHER_ID)
     if teacher is None:
@@ -46,6 +76,8 @@ async def seed_demo_data(db: AsyncSession) -> None:
         class_ref = ClassModel(
             id=DEMO_CLASS_ID,
             teacher_id=DEMO_TEACHER_ID,
+            name="Class 2A Mathematics",
+            class_code="DEMO2A",
             grade=2,
             section="A",
             subject_focus="Foundational Literacy and Numeracy",
@@ -54,22 +86,58 @@ async def seed_demo_data(db: AsyncSession) -> None:
         )
         db.add(class_ref)
 
-    student = Student(
-        id=DEMO_STUDENT_ID,
-        name="Rahul",
-        class_id=DEMO_CLASS_ID,
-        mother_tongue="sat",
-        grade=2,
-        school="Government Primary School",
-        points=120,
-        streak_days=4,
-        attendance=92.0,
-        reading_score=78.0,
-        numeracy_score=82.0,
-        vocabulary_score=74.0,
-    )
-    student.recompute_overall()
-    db.add(student)
+    student = await db.get(Student, DEMO_STUDENT_ID)
+    if student is None:
+        student = Student(
+            id=DEMO_STUDENT_ID,
+            name="Rahul",
+            class_id=DEMO_CLASS_ID,
+            student_code="STU1000",
+            password_hash=password_hash,
+            mother_tongue="sat",
+            grade=2,
+            school="Government Primary School",
+            points=120,
+            streak_days=4,
+            attendance=92.0,
+            reading_score=78.0,
+            numeracy_score=82.0,
+            vocabulary_score=74.0,
+        )
+        student.recompute_overall()
+        db.add(student)
+    elif student.student_code is None or student.password_hash is None:
+        student.student_code = student.student_code or "STU1000"
+        student.password_hash = student.password_hash or password_hash
+
+    for spec in DEMO_LOGIN_STUDENTS:
+        login_student = await db.get(Student, spec["id"])
+        if login_student is None:
+            login_student = Student(
+                id=spec["id"],
+                name=spec["name"],
+                class_id=DEMO_CLASS_ID,
+                student_code=spec["code"],
+                password_hash=password_hash,
+                mother_tongue="sat",
+                grade=2,
+                school="Government Primary School",
+                points=spec["points"],
+                streak_days=spec["streak_days"],
+                attendance=spec["attendance"],
+                reading_score=spec["reading_score"],
+                numeracy_score=spec["numeracy_score"],
+                vocabulary_score=spec["vocabulary_score"],
+            )
+            login_student.recompute_overall()
+            db.add(login_student)
+        elif login_student.student_code is None or login_student.password_hash is None:
+            login_student.student_code = login_student.student_code or spec["code"]
+            login_student.password_hash = login_student.password_hash or password_hash
+
+    if await db.get(Lesson, uuid.UUID("00000000-0000-0000-0000-000000000101")) is not None:
+        await db.commit()
+        return
 
     for index, (topic, subject, objective) in enumerate(DEMO_LESSONS, start=1):
         lesson = Lesson(
@@ -124,10 +192,6 @@ async def seed_demo_data(db: AsyncSession) -> None:
 
 
 async def ensure_demo_data(db: AsyncSession) -> None:
-    result = await db.execute(
-        select(Student)
-        .where(Student.id == DEMO_STUDENT_ID)
-        .options(selectinload(Student.class_ref))
-    )
-    if result.scalar_one_or_none() is None:
-        await seed_demo_data(db)
+    """seed_demo_data is itself idempotent (per-entity get-or-create/backfill),
+    so this is just a readable alias called from the app startup lifespan."""
+    await seed_demo_data(db)

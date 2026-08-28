@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, JSON, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -27,6 +27,7 @@ class Lesson(Base, UUIDPKMixin, TimestampMixin):
     mother_tongue_script: Mapped[str] = mapped_column(Text, nullable=False)
     activity: Mapped[str] = mapped_column(Text, nullable=False)
     assessment_topics: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    downloadable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     class_ref: Mapped["ClassModel"] = relationship(back_populates="lessons")  # noqa: F821
     quizzes: Mapped[list["Quiz"]] = relationship(back_populates="lesson")  # noqa: F821
@@ -52,5 +53,6 @@ class LessonContent(Base, UUIDPKMixin, TimestampMixin):
     language: Mapped[str] = mapped_column(String(8), nullable=False)
     text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
     lesson: Mapped["Lesson"] = relationship(back_populates="content_items")

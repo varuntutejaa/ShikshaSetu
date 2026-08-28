@@ -39,6 +39,7 @@ class LessonResponse(BaseModel):
     mother_tongue_script: str
     activity: str
     assessment_topics: list[str]
+    downloadable: bool = False
     created_at: datetime
 
 
@@ -51,6 +52,7 @@ class LessonContentResponse(BaseModel):
     language: str
     text_content: str | None
     audio_url: str | None
+    metadata_json: dict | None = None
     created_at: datetime
 
 
@@ -64,3 +66,15 @@ class GenerateAudioRequest(BaseModel):
         if not is_supported_language(value):
             raise ValueError(f"Unsupported language code: {value}")
         return value
+
+
+class TeachingPackResponse(BaseModel):
+    lesson: LessonResponse
+    content: list[LessonContentResponse]
+    quiz_id: uuid.UUID | None = None
+    viva_seed: dict
+    offline_manifest: dict
+
+
+class DownloadableRequest(BaseModel):
+    downloadable: bool = True

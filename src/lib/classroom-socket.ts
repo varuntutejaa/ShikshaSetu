@@ -4,6 +4,7 @@
  */
 
 import { API_BASE_URL } from "@/lib/api";
+import type { ClassroomParticipant } from "@/lib/api";
 
 export interface ClassroomEvent {
   type: "transcript" | "translation" | "audio" | "latency" | "error" | "config_ack";
@@ -15,6 +16,7 @@ export interface ClassroomEvent {
   data?: string;
   total_ms?: number;
   message?: string;
+  context_used?: Record<string, unknown> | null;
 }
 
 export interface ClassroomSocketHandlers {
@@ -25,10 +27,21 @@ export interface ClassroomSocketHandlers {
 }
 
 export interface ClassroomSocket {
-  sendConfig: (sourceLanguage: string, targetLanguage: string) => void;
+  sendConfig: (
+    sourceLanguage: string,
+    targetLanguage: string,
+    contentType?: string,
+    lessonContext?: Record<string, unknown>
+  ) => void;
   sendAudioSegment: (audio: Blob | ArrayBuffer) => void;
   close: () => void;
 }
+
+export type PresenceEvent =
+  | { type: "presence_snapshot"; participants: ClassroomParticipant[] }
+  | { type: "participant_joined" | "participant_left"; participant: ClassroomParticipant }
+  | { type: "content_changed"; session_id: string; lesson_id: string | null; slide_index: number; offline_pack?: Record<string, unknown> | null }
+  | { type: "pong" };
 
 function wsBaseUrl(): string {
   return API_BASE_URL.replace(/^http/, "ws");
@@ -52,10 +65,16 @@ export function connectClassroomSocket(
   };
 
   return {
-    sendConfig(sourceLanguage, targetLanguage) {
+    sendConfig(sourceLanguage, targetLanguage, contentType, lessonContext) {
       if (socket.readyState !== WebSocket.OPEN) return;
       socket.send(
-        JSON.stringify({ type: "config", source_language: sourceLanguage, target_language: targetLanguage })
+        JSON.stringify({
+          type: "config",
+          source_language: sourceLanguage,
+          target_language: targetLanguage,
+          ...(contentType ? { content_type: contentType } : {}),
+          ...(lessonContext ? { lesson_context: lessonContext } : {}),
+        })
       );
     },
     sendAudioSegment(audio) {
@@ -66,6 +85,31 @@ export function connectClassroomSocket(
       socket.close();
     },
   };
+}
+
+export function connectClassroomPresenceSocket(
+  sessionId: string,
+  participant: { type: "teacher" | "student"; name: string; studentId?: string },
+  handlers: { onEvent: (event: PresenceEvent) => void; onClose?: () => void; onSocketError?: () => void }
+): WebSocket & { setContent?: (lessonId: string | null, slideIndex: number) => void } {
+  const params = new URLSearchParams({ type: participant.type, name: participant.name });
+  if (participant.studentId) params.set("student_id", participant.studentId);
+  const socket = new WebSocket(`${wsBaseUrl()}/ws/classroom/${sessionId}/presence?${params}`);
+  socket.onclose = () => handlers.onClose?.();
+  socket.onerror = () => handlers.onSocketError?.();
+  socket.onmessage = (event) => {
+    try {
+      handlers.onEvent(JSON.parse(event.data));
+    } catch {
+      // ignore malformed frames
+    }
+  };
+  return Object.assign(socket, {
+    setContent(lessonId: string | null, slideIndex: number) {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: "set_content", lesson_id: lessonId, slide_index: slideIndex }));
+    },
+  });
 }
 
 /** Decode a base64 "audio" event payload into a playable object URL. */

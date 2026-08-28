@@ -32,7 +32,16 @@ import {
   generateMockLesson,
   type GeneratedLesson,
 } from "@/lib/mock-data";
-import { generateLesson, ApiError, LANGUAGE_NAME_TO_CODE } from "@/lib/api";
+import {
+  ApiError,
+  generateLesson,
+  generateLessonAudio,
+  generateLessonFlashcards,
+  generateLessonWorksheet,
+  generateTeachingPack,
+  LANGUAGE_NAME_TO_CODE,
+  setLessonDownloadable,
+} from "@/lib/api";
 
 export function LessonStudio({
   onQuizRequested,
@@ -53,6 +62,8 @@ export function LessonStudio({
   const [loading, setLoading] = useState(false);
   const [lesson, setLesson] = useState<GeneratedLesson | null>(null);
   const [source, setSource] = useState<"live" | "offline" | null>(null);
+  const [lessonId, setLessonId] = useState<string | null>(null);
+  const [assetStatus, setAssetStatus] = useState<string | null>(null);
 
   async function handleGenerate() {
     setLoading(true);
@@ -76,6 +87,7 @@ export function LessonStudio({
         activity: result.activity,
       });
       setSource("live");
+      setLessonId(result.id);
       onLessonGenerated?.(result.id);
     } catch (err) {
       // Backend unreachable or erroring — fall back to the local mock
@@ -85,9 +97,26 @@ export function LessonStudio({
       }
       setLesson(generateMockLesson(studentLanguage, topic));
       setSource("offline");
+      setLessonId(null);
       onLessonGenerated?.(null);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runAssetAction(action: "audio" | "worksheet" | "flashcards" | "pack" | "downloadable") {
+    if (!lessonId) return;
+    setAssetStatus("Generating assets…");
+    try {
+      const language = LANGUAGE_NAME_TO_CODE[studentLanguage] ?? "sat";
+      if (action === "audio") await generateLessonAudio(lessonId, "mother_tongue", language);
+      if (action === "worksheet") await generateLessonWorksheet(lessonId, language);
+      if (action === "flashcards") await generateLessonFlashcards(lessonId, language);
+      if (action === "pack") await generateTeachingPack(lessonId);
+      if (action === "downloadable") await setLessonDownloadable(lessonId, true);
+      setAssetStatus("Saved to lesson pack.");
+    } catch (err) {
+      setAssetStatus(err instanceof ApiError ? err.message : "Could not generate lesson asset.");
     }
   }
 
@@ -225,6 +254,11 @@ export function LessonStudio({
                 Backend unreachable — showing an offline sample lesson. Start the ShikshaSetu backend to generate real AI content.
               </div>
             )}
+            {assetStatus && (
+              <div className="rounded-lg border border-info/30 bg-info/10 px-3.5 py-2 text-xs text-info">
+                {assetStatus}
+              </div>
+            )}
             <div className="rounded-xl border border-border bg-card p-5">
               <div className="flex items-center gap-2 mb-3">
                 <Target className="h-4 w-4 text-primary" />
@@ -270,19 +304,22 @@ export function LessonStudio({
             <Separator />
 
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" className="gap-2">
+              <Button variant="outline" className="gap-2" disabled={!lessonId} onClick={() => runAssetAction("audio")}>
                 <Volume2 className="h-4 w-4" /> Generate Audio
               </Button>
-              <Button variant="outline" className="gap-2">
+              <Button variant="outline" className="gap-2" disabled={!lessonId} onClick={() => runAssetAction("worksheet")}>
                 <FileText className="h-4 w-4" /> Generate Worksheet
               </Button>
               <Button variant="outline" className="gap-2" onClick={onQuizRequested}>
                 <Brain className="h-4 w-4" /> Generate Quiz
               </Button>
-              <Button variant="outline" className="gap-2">
-                <Pencil className="h-4 w-4" /> Edit Lesson
+              <Button variant="outline" className="gap-2" disabled={!lessonId} onClick={() => runAssetAction("flashcards")}>
+                <Pencil className="h-4 w-4" /> Flashcards
               </Button>
-              <Button className="gap-2 ml-auto">
+              <Button variant="outline" className="gap-2" disabled={!lessonId} onClick={() => runAssetAction("pack")}>
+                <Pencil className="h-4 w-4" /> Teaching Pack
+              </Button>
+              <Button className="gap-2 ml-auto" disabled={!lessonId} onClick={() => runAssetAction("downloadable")}>
                 <Send className="h-4 w-4" /> Send to Students
               </Button>
             </div>

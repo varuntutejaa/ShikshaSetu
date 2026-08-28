@@ -1,3 +1,4 @@
+from app.core.security import hash_password
 from app.models.student import Student
 
 
@@ -42,9 +43,33 @@ async def test_record_and_fetch_progress(client, db_session):
     assert len(events) == 1
     assert events[0]["event_type"] == "lesson_completed"
 
+    insights_response = await client.get(f"/api/students/{student.id}/learning-insights")
+    assert insights_response.status_code == 200
+    insights = insights_response.json()
+    assert insights["strengths"][0]["concept"] == "Addition"
+    assert insights["recommendation"]
+
 
 async def test_student_app_profile_endpoint(client, db_session):
-    student = await _create_student(db_session)
-    response = await client.get(f"/api/student/{student.id}")
+    student = Student(
+        name="Birsa Murmu",
+        mother_tongue="sat",
+        grade=2,
+        school="Govt Primary School",
+        student_code="STU7001",
+        password_hash=hash_password("student123"),
+    )
+    db_session.add(student)
+    await db_session.commit()
+    await db_session.refresh(student)
+
+    login = await client.post(
+        "/api/auth/student/login", json={"student_id": "STU7001", "password": "student123"}
+    )
+    token = login.json()["token"]
+
+    response = await client.get(
+        f"/api/student/{student.id}", headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.status_code == 200
     assert response.json()["id"] == str(student.id)

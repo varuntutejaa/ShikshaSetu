@@ -7,8 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.routes import auth as auth_routes
+from app.api.routes import classroom as classroom_routes
 from app.api.routes import health, lessons, quizzes, speech, students, sync, translation, viva
-from app.api.websocket import classroom, student
+from app.api.websocket import classroom as classroom_ws
+from app.api.websocket import student as student_ws
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, dispose_engine, init_models
 from app.core.exceptions import AppError
@@ -94,6 +97,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 
 app.include_router(health.router)
+app.include_router(auth_routes.router)
 app.include_router(translation.router)
 app.include_router(speech.router)
 app.include_router(lessons.router)
@@ -102,5 +106,6 @@ app.include_router(viva.router)
 app.include_router(students.router)
 app.include_router(students.student_app_router)
 app.include_router(sync.router)
-app.include_router(classroom.router)
-app.include_router(student.router)
+app.include_router(classroom_routes.router)
+app.include_router(classroom_ws.router)
+app.include_router(student_ws.router)

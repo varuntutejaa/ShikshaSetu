@@ -9,8 +9,11 @@ httpx==0.28.1
 python-multipart==0.0.20
 websockets==14.1
 python-dotenv==1.0.1
+livekit-api==1.2.1
+bcrypt==4.2.1
 
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.25.0
 aiosqlite==0.20.0
+PyJWT==2.13.0  # transitive via livekit-api; pinned explicitly since tests decode tokens directly

@@ -2,24 +2,34 @@
 
 FastAPI backend for ShikshaSetu — the AI-powered multilingual classroom
 assistant connecting a Hindi-speaking teacher to Ho/Mundari/Santhali-speaking
-students, via Sarvam AI (speech/translation) and a pluggable LLM (lessons,
-quizzes, AI Viva).
+students, via Sarvam AI (speech/translation), a pluggable LLM (lessons,
+quizzes, AI Viva), and LiveKit (live teacher video).
 
 ```
 Teacher Web App
         ↓
-      FastAPI
+   Camera + Mic
         ↓
- ┌──────┼────────┐
- ↓      ↓        ↓
-Sarvam  LLM   PostgreSQL
- ↓      ↓        ↓
-Voice  AI      Progress
- ↓      ↓
-Translation / Quiz / Viva
+ ┌──────┴──────┐
+ ↓             ↓
+VIDEO        AUDIO
+ ↓             ↓
+LiveKit    FastAPI WS
+(WebRTC)       ↓
+ │         Sarvam AI (STT → translate → TTS)
+ │             ↓
+ │        Translated audio
+ └──────┬──────┘
         ↓
-   Android Student App
+  Student (web/Android)
+
+      + FastAPI REST: lessons, quizzes, AI Viva, students, sync, PostgreSQL
 ```
+
+Video and AI audio are two **independent** realtime pipelines that never
+touch each other: FastAPI only issues LiveKit tokens (never sees a video
+frame), while AI audio translation runs entirely over its own WebSocket. If
+one fails, the other keeps working — see §12.
 
 The single most important thing this backend does:
 
@@ -66,28 +76,63 @@ cp .env.example .env
 | `LLM_API_KEY` | API key for the chosen LLM provider. |
 | `DATABASE_URL` | SQLAlchemy async URL, e.g. `postgresql+asyncpg://user:pass@host:5432/db`. |
 | `CORS_ORIGINS` | Comma-separated list of allowed frontend origins. |
+| `LIVEKIT_URL` | LiveKit server WebSocket URL, e.g. `wss://your-project.livekit.cloud`. |
+| `LIVEKIT_API_KEY` | LiveKit API key. |
+| `LIVEKIT_API_SECRET` | LiveKit API secret — used only to *sign* short-lived room tokens server-side. |
+| `ADMIN_API_KEY` | Shared secret required as the `X-Admin-Key` header to create student logins via `POST /api/auth/student/register`. Empty (default) leaves registration open — fine for local/demo use; set this before exposing the backend publicly. |
 
-**Secrets never leave the backend.** No API key is ever returned in a
-response or forwarded to the Next.js frontend or the Android app.
+**Secrets never leave the backend.** No API key or LiveKit secret is ever
+returned in a response or forwarded to the Next.js frontend or the Android
+app — the frontend only ever receives a short-lived, scoped LiveKit token
+(see §15).
 
-## 5. PostgreSQL setup
+## 4a. Student authentication
+
+The Android app logs students in with a **Student ID + password** (no
+email) against `POST /api/auth/student/login`. Passwords are hashed with
+bcrypt (`app/core/security.py`); sessions are opaque server-issued tokens
+stored (hashed) in `student_sessions`, so `POST /api/auth/student/logout`
+genuinely revokes access rather than just discarding a stateless JWT.
+
+In mock mode (the default), three demo logins are seeded automatically on
+startup — **demo credentials only, never real students**:
+
+| Student ID | Password | Name |
+|---|---|---|
+| `STU1000` | `student123` | Rahul (the original seeded demo profile) |
+| `STU1001` | `student123` | Sita Hansda |
+| `STU1002` | `student123` | Amit Murmu |
+
+New logins can be created via `POST /api/auth/student/register` (guarded by
+`ADMIN_API_KEY` when set) — this is the demo/admin "create a student"
+flow, exposed in the Android app as a "Create demo student ID" screen
+reachable from Login.
+
+Already have a deployed database from before auth existed? Run
+`migrations/20260828_student_auth.sql` against it — the new columns are
+nullable so it's safe against existing rows, and the app also backfills
+credentials onto the pre-existing demo student on startup.
+
+## 5. Supabase PostgreSQL setup
+
+Production uses Supabase as the managed PostgreSQL database. Do not create a
+separate local production database and do not expose `DATABASE_URL` to
+Next.js/browser/Android clients.
+
+Set the backend/server-side environment variable:
 
 ```bash
-createdb shikshasetu
-# or with Docker:
-docker run --name shikshasetu-db -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=shikshasetu -p 5432:5432 -d postgres:16
+DATABASE_URL=postgresql+asyncpg://postgres.<project-ref>:<db-password>@<supabase-host>:5432/postgres?ssl=require
 ```
 
-Set `DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/shikshasetu`
-in `.env`. Tables are created automatically on startup (`init_models()` in
-`app/main.py`) — there's no separate migration step for this first version
-(see `app/core/database.py` for the note on swapping in Alembic later).
+Apply additive migrations with the Supabase CLI:
 
-> Don't have Postgres installed? The app also happily runs against SQLite
-> for local development — set `DATABASE_URL=sqlite+aiosqlite:///./dev.db`.
-> All models use dialect-portable types (`Uuid`, `JSON`) for exactly this
-> reason. Use real Postgres before deploying.
+```bash
+npx supabase db push --db-url "$SUPABASE_DB_URL"
+```
+
+SQLite remains acceptable for isolated automated tests only. Production and
+Render must use Supabase PostgreSQL.
 
 ## 6. Running the backend
 
@@ -204,6 +249,11 @@ sequence per segment (no LLM call in the hot path) to stay lightweight and
 target the ≤3s requirement; swapping in Sarvam's streaming STT protocol
 later is a drop-in change inside `app/services/sarvam_service.py`.
 
+The client may also send `"content_type"` in the config message (e.g.
+`"audio/webm;codecs=opus"`) so the correct format is passed through to
+Sarvam — a real browser `MediaRecorder` doesn't produce WAV. Defaults to
+`audio/webm` if omitted.
+
 ### `WS /ws/student/{student_id}` — push channel to a student device
 
 ```json
@@ -214,7 +264,46 @@ later is a drop-in change inside `app/services/sarvam_service.py`.
 {"type": "notification", "event": "...", "payload": {...}}
 ```
 
-## 12. Android integration instructions
+## 12. Live video pipeline (LiveKit)
+
+**This backend never touches a video frame.** It only issues short-lived,
+scoped tokens so the teacher's browser (and eventually the Android app)
+connect *directly* to LiveKit's SFU over WebRTC — completely independent of
+the AI audio WebSocket above. If video fails, AI audio keeps working; if
+Sarvam fails, video keeps working. Neither pipeline can take the other
+down.
+
+```
+POST /api/classroom/session
+  {"teacher_language": "hi", "student_language": "sat"}
+  -> {"session_id": "...", "status": "active", ...}
+
+POST /api/classroom/livekit-token
+  {"session_id": "...", "participant_type": "teacher" | "student"}
+  -> {"token": "...", "url": "wss://...", "room": "classroom-<session_id>"}
+
+POST /api/classroom/session/{id}/end
+GET  /api/classroom/session/{id}
+```
+
+- The room name is always `classroom-{session_id}` — video and AI audio
+  share the same session id as their common handle, per the target
+  architecture, without either pipeline depending on the other's state.
+- **Teacher** tokens grant `can_publish=true` (camera + mic, an ordinary
+  video-call track). **Student** tokens are subscribe-only
+  (`can_publish=false`) — students never publish video.
+- If `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` aren't set,
+  `/api/classroom/livekit-token` returns a typed `503
+  LIVEKIT_NOT_CONFIGURED` error rather than a fake token — this is
+  independent of `MOCK_MODE`: video is either configured or it isn't,
+  regardless of whether AI calls are mocked. The teacher web UI shows
+  "Video not configured on this backend" and the AI audio pipeline is
+  entirely unaffected.
+- Get real credentials from a [LiveKit Cloud](https://cloud.livekit.io)
+  project (free tier available) or a self-hosted LiveKit server, then set
+  the three env vars above — video lights up with no code changes.
+
+## 13. Android integration instructions
 
 The Android app **must never call Sarvam or the LLM provider directly** —
 every call goes through this backend:
@@ -238,7 +327,17 @@ All response bodies are plain JSON — no custom envelope beyond the
 `{"error": {...}}` shape on failure — so a generated Retrofit/Moshi client
 works with zero hand-written adapters.
 
-## 13. Offline sync
+For live video (§12), the Android app would join the same LiveKit room the
+teacher published to — call `POST /api/classroom/livekit-token` with
+`participant_type: "student"`, connect with the official [LiveKit Android
+SDK](https://github.com/livekit/client-sdk-android) using the returned
+`url`/`token`, and subscribe to the teacher's video track. AI audio stays on
+the separate `WS /ws/classroom/{session_id}` above — never mixed into the
+LiveKit room. The Android client itself lives in a separate project and
+implementing it was out of scope for this backend/web-app change; the
+contract above is what it needs.
+
+## 14. Offline sync
 
 The Android app queues events locally (Room) while offline and flushes them
 via `POST /api/sync` (or the per-student `POST /api/student/{id}/sync`):
@@ -262,7 +361,7 @@ table. Re-submitting the same batch after a dropped connection is safe —
 already-seen events are reported as processed again without being
 re-applied (see `app/services/sync_service.py`).
 
-## 14. Deployment
+## 15. Deployment
 
 ```bash
 docker build -t shikshasetu-backend .
@@ -287,12 +386,15 @@ somewhere with an ephemeral filesystem.
 pytest -v
 ```
 
-19 tests cover health, translation validation (including the Ho/Mundari
+27 tests cover health, translation validation (including the Ho/Mundari
 mock-fallback path), lesson generation, quiz generation (teacher view has
 `correct_answer`, student view never does), quiz scoring, the full AI Viva
-flow including semantic word-form answer matching, student progress, and
-sync idempotency. All tests run against an isolated SQLite database and
-mock AI providers — zero network calls, zero API credits.
+flow including semantic word-form answer matching, student progress, sync
+idempotency, the classroom session lifecycle, and LiveKit token issuance in
+both the unconfigured (typed 503, never a fake token) and configured
+(correct room/grants — teacher can publish, student can't) cases. All tests
+run against an isolated SQLite database and mock AI providers — zero
+network calls, zero API credits.
 
 ## Project layout
 
@@ -301,8 +403,8 @@ app/
 ├── main.py                 FastAPI app, CORS, error handlers, router wiring
 ├── core/                   config, DB session, language config, exceptions, local storage
 ├── api/routes/             REST endpoints (health, translation, speech, lessons,
-│                           quizzes, viva, students, sync)
-├── api/websocket/          /ws/classroom, /ws/student
+│                           quizzes, viva, students, sync, classroom)
+├── api/websocket/          /ws/classroom (AI audio), /ws/student
 ├── services/                business logic + external API clients
 │   ├── sarvam_service.py    STT / translate / TTS (real + mock)
 │   ├── llm_service.py       provider-agnostic LLM interface (mock / OpenAI / Sarvam)
@@ -310,7 +412,9 @@ app/
 │   ├── lesson_service.py
 │   ├── quiz_service.py
 │   ├── viva_service.py
-│   └── sync_service.py
-├── models/                  SQLAlchemy 2.x ORM models
+│   ├── sync_service.py
+│   ├── classroom_service.py class session lifecycle
+│   └── livekit_service.py   LiveKit token issuance only — never touches media
+├── models/                  SQLAlchemy 2.x ORM models (incl. classroom.py: ClassSession)
 └── schemas/                  Pydantic request/response models
 ```

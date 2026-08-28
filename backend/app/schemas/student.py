@@ -9,6 +9,7 @@ class StudentResponse(BaseModel):
 
     id: uuid.UUID
     name: str
+    student_code: str | None = None
     class_id: uuid.UUID | None
     mother_tongue: str
     grade: int
