@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Bell, ChevronDown, Landmark, LogOut, Settings, User } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Settings, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,7 +57,7 @@ function initials(name: string) {
 
 export function Header() {
   const router = useRouter();
-  const { teacher } = useTeacherAuth();
+  const { teacher, token, clearSession } = useTeacherAuth();
   const [interfaceLanguage, setInterfaceLanguage] = useState("Hindi");
   const teacherName = teacher?.name ?? "Teacher";
   const schoolName = teacher?.school_name ?? "No school set yet";
@@ -64,9 +65,7 @@ export function Header() {
   const studentLang = teacher ? LANGUAGE_CODE_TO_NAME[teacher.default_student_language] ?? teacher.default_student_language : null;
 
   async function handleLogout() {
-    const token = localStorage.getItem("shikshasetu_teacher_token");
-    localStorage.removeItem("shikshasetu_teacher_token");
-    localStorage.removeItem("shikshasetu_teacher");
+    clearSession();
     if (token) {
       try {
         await logoutTeacher(token);
@@ -79,10 +78,8 @@ export function Header() {
 
   return (
     <header className="h-16 shrink-0 border-b border-border bg-card px-4 md:px-6 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-2.5 md:hidden">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <Landmark className="h-4 w-4" />
-        </div>
+      <div className="flex items-center gap-2 md:hidden">
+        <Image src="/brand/shikshasetu-mark.png" alt="" width={30} height={30} />
         <span className="font-semibold text-sm">ShikshaSetu</span>
       </div>
 
