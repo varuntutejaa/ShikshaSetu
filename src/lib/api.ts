@@ -195,6 +195,22 @@ export interface Student {
   created_at: string;
 }
 
+export interface Teacher {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  school_name: string | null;
+  default_teacher_language: string;
+  default_student_language: string;
+}
+
+export interface TeacherAuthResult {
+  token: string;
+  expires_at: string;
+  teacher: Teacher;
+}
+
 export interface SyncEventIn {
   event_id: string;
   type: string;
@@ -398,6 +414,37 @@ export function recordStudentProgress(
   return apiFetch(`/api/students/${studentId}/progress`, {
     method: "POST",
     body: JSON.stringify({ event_type: eventType, competency, score, extra_data: extraData }),
+  });
+}
+
+export function loginTeacher(email: string, password: string): Promise<TeacherAuthResult> {
+  return apiFetch<TeacherAuthResult>("/api/auth/teacher/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function signupTeacher(input: {
+  name: string;
+  email: string;
+  password: string;
+  phone?: string;
+  school_name?: string;
+}): Promise<TeacherAuthResult> {
+  return apiFetch<TeacherAuthResult>("/api/auth/teacher/register", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function demoTeacherLogin(): Promise<TeacherAuthResult> {
+  return apiFetch<TeacherAuthResult>("/api/auth/teacher/demo", { method: "POST" });
+}
+
+export function logoutTeacher(token: string): Promise<void> {
+  return apiFetch<void>("/api/auth/teacher/logout", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
   });
 }
 

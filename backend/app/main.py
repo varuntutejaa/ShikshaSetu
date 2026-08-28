@@ -98,6 +98,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 app.include_router(health.router)
 app.include_router(auth_routes.router)
+app.include_router(auth_routes.teacher_router)
 app.include_router(translation.router)
 app.include_router(speech.router)
 app.include_router(lessons.router)

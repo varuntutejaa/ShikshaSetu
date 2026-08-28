@@ -6,6 +6,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS teachers (
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255),
+    password_hash VARCHAR(255),
     phone VARCHAR(32),
     school_name VARCHAR(255),
     default_teacher_language VARCHAR(8) NOT NULL,
@@ -138,6 +139,19 @@ CREATE TABLE IF NOT EXISTS student_sessions (
 );
 CREATE INDEX IF NOT EXISTS ix_student_sessions_student_id ON student_sessions (student_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ix_student_sessions_token_hash ON student_sessions (token_hash);
+
+CREATE TABLE IF NOT EXISTS teacher_sessions (
+    teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_teacher_sessions_teacher_id ON teacher_sessions (teacher_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_teacher_sessions_token_hash ON teacher_sessions (token_hash);
 
 CREATE TABLE IF NOT EXISTS sync_events (
     student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,

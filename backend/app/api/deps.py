@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.exceptions import UnauthorizedError
 from app.models.student import Student
-from app.services.auth_service import get_student_for_token
+from app.models.teacher import Teacher
+from app.services.auth_service import get_student_for_token, get_teacher_for_token
 
 
 def extract_bearer_token(authorization: str | None) -> str | None:
@@ -31,3 +32,16 @@ async def get_current_student(
     if student is None:
         raise UnauthorizedError("Session expired or invalid — please log in again")
     return student
+
+
+async def get_current_teacher(
+    authorization: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Teacher:
+    token = extract_bearer_token(authorization)
+    if token is None:
+        raise UnauthorizedError("Missing or invalid Authorization header")
+    teacher = await get_teacher_for_token(db, token)
+    if teacher is None:
+        raise UnauthorizedError("Session expired or invalid — please log in again")
+    return teacher

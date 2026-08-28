@@ -22,11 +22,19 @@ from app.core.security import (
 )
 from app.models.student import Student
 from app.models.student_session import StudentSession
-from app.schemas.auth import StudentRegisterRequest
+from app.models.teacher import Teacher
+from app.models.teacher_session import TeacherSession
+from app.schemas.auth import StudentRegisterRequest, TeacherRegisterRequest
 
 
 async def get_student_by_code(db: AsyncSession, student_code: str) -> Student | None:
     stmt = select(Student).where(Student.student_code == student_code)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_teacher_by_email(db: AsyncSession, email: str) -> Teacher | None:
+    stmt = select(Teacher).where(Teacher.email == email.strip().lower())
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
@@ -102,3 +110,86 @@ async def get_student_for_token(db: AsyncSession, token: str) -> Student | None:
         return None
 
     return await db.get(Student, session.student_id)
+
+
+async def register_teacher(db: AsyncSession, payload: TeacherRegisterRequest) -> Teacher:
+    email = payload.email.strip().lower()
+    if await get_teacher_by_email(db, email) is not None:
+        raise ConflictError(f"Teacher email '{email}' is already registered")
+    teacher = Teacher(
+        name=payload.name,
+        email=email,
+        password_hash=hash_password(payload.password),
+        phone=payload.phone,
+        school_name=payload.school_name,
+        default_teacher_language=payload.default_teacher_language,
+        default_student_language=payload.default_student_language,
+    )
+    db.add(teacher)
+    await db.commit()
+    await db.refresh(teacher)
+    return teacher
+
+
+async def ensure_demo_teacher(db: AsyncSession) -> Teacher:
+    teacher = await get_teacher_by_email(db, "demo")
+    if teacher is None:
+        teacher = Teacher(
+            name="Demo Teacher",
+            email="demo",
+            password_hash=hash_password("demo"),
+            school_name="Government Primary School",
+            default_teacher_language="hi",
+            default_student_language="sat",
+        )
+        db.add(teacher)
+        await db.commit()
+        await db.refresh(teacher)
+    elif teacher.password_hash is None:
+        teacher.password_hash = hash_password("demo")
+        await db.commit()
+        await db.refresh(teacher)
+    return teacher
+
+
+async def authenticate_teacher(db: AsyncSession, email: str, password: str) -> Teacher:
+    teacher = await get_teacher_by_email(db, email)
+    if teacher is None or teacher.password_hash is None or not verify_password(password, teacher.password_hash):
+        raise UnauthorizedError("Invalid email or password")
+    return teacher
+
+
+async def create_teacher_session(db: AsyncSession, teacher: Teacher) -> tuple[str, TeacherSession]:
+    token = generate_session_token()
+    session = TeacherSession(
+        teacher_id=teacher.id,
+        token_hash=hash_token(token),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS),
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return token, session
+
+
+async def revoke_teacher_session(db: AsyncSession, token: str) -> None:
+    stmt = select(TeacherSession).where(TeacherSession.token_hash == hash_token(token))
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if session is not None and session.revoked_at is None:
+        session.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+
+
+async def get_teacher_for_token(db: AsyncSession, token: str) -> Teacher | None:
+    stmt = select(TeacherSession).where(TeacherSession.token_hash == hash_token(token))
+    result = await db.execute(stmt)
+    session = result.scalar_one_or_none()
+    if session is None or session.revoked_at is not None:
+        return None
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        return None
+    return await db.get(Teacher, session.teacher_id)

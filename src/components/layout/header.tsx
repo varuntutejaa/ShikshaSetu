@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Bell, ChevronDown, Landmark, LogOut, Settings, User } from "lucide-react";
 import {
   DropdownMenu,
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { logoutTeacher } from "@/lib/api";
 import { TEACHER_NAME, SCHOOL_NAME } from "@/lib/mock-data";
 
 const NOTIFICATIONS = [
@@ -44,7 +46,22 @@ const NOTIFICATIONS = [
 ];
 
 export function Header() {
+  const router = useRouter();
   const [interfaceLanguage, setInterfaceLanguage] = useState("Hindi");
+
+  async function handleLogout() {
+    const token = localStorage.getItem("shikshasetu_teacher_token");
+    localStorage.removeItem("shikshasetu_teacher_token");
+    localStorage.removeItem("shikshasetu_teacher");
+    if (token) {
+      try {
+        await logoutTeacher(token);
+      } catch {
+        // Local logout should still complete even if the session is already gone.
+      }
+    }
+    router.push("/login");
+  }
 
   return (
     <header className="h-16 shrink-0 border-b border-border bg-card px-4 md:px-6 flex items-center justify-between gap-4">
@@ -131,7 +148,7 @@ export function Header() {
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive">
+            <DropdownMenuItem variant="destructive" onClick={handleLogout}>
               <LogOut className="h-4 w-4" /> Log out
             </DropdownMenuItem>
           </DropdownMenuContent>

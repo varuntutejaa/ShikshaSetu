@@ -8,10 +8,12 @@ from app.models.quiz import Quiz, QuizAttempt, QuizQuestion
 from app.models.student import Student
 from app.models.student_session import StudentSession
 from app.models.teacher import Teacher
+from app.models.teacher_session import TeacherSession
 from app.models.viva import VivaAnswer, VivaQuestion, VivaSession
 
 __all__ = [
     "Teacher",
+    "TeacherSession",
     "ClassModel",
     "ClassSession",
     "ClassSessionParticipant",

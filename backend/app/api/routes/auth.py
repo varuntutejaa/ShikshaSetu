@@ -1,16 +1,26 @@
 from fastapi import APIRouter, Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import extract_bearer_token, get_current_student
+from app.api.deps import extract_bearer_token, get_current_student, get_current_teacher
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.exceptions import UnauthorizedError
 from app.models.student import Student
-from app.schemas.auth import StudentAuthResponse, StudentLoginRequest, StudentRegisterRequest
+from app.models.teacher import Teacher
+from app.schemas.auth import (
+    StudentAuthResponse,
+    StudentLoginRequest,
+    StudentRegisterRequest,
+    TeacherAuthResponse,
+    TeacherLoginRequest,
+    TeacherRegisterRequest,
+    TeacherResponse,
+)
 from app.schemas.student import StudentResponse
 from app.services import auth_service
 
 router = APIRouter(prefix="/api/auth/student", tags=["auth"])
+teacher_router = APIRouter(prefix="/api/auth/teacher", tags=["auth"])
 
 
 def _require_admin_key(x_admin_key: str | None = Header(default=None, alias="X-Admin-Key")) -> None:
@@ -57,3 +67,55 @@ async def logout(
 @router.get("/me", response_model=StudentResponse)
 async def me(current: Student = Depends(get_current_student)) -> StudentResponse:
     return StudentResponse.model_validate(current)
+
+
+@teacher_router.post("/register", response_model=TeacherAuthResponse)
+async def register_teacher(
+    payload: TeacherRegisterRequest, db: AsyncSession = Depends(get_db)
+) -> TeacherAuthResponse:
+    teacher = await auth_service.register_teacher(db, payload)
+    token, session = await auth_service.create_teacher_session(db, teacher)
+    return TeacherAuthResponse(
+        token=token,
+        expires_at=session.expires_at,
+        teacher=TeacherResponse.model_validate(teacher),
+    )
+
+
+@teacher_router.post("/login", response_model=TeacherAuthResponse)
+async def login_teacher(
+    payload: TeacherLoginRequest, db: AsyncSession = Depends(get_db)
+) -> TeacherAuthResponse:
+    teacher = await auth_service.authenticate_teacher(db, payload.email, payload.password)
+    token, session = await auth_service.create_teacher_session(db, teacher)
+    return TeacherAuthResponse(
+        token=token,
+        expires_at=session.expires_at,
+        teacher=TeacherResponse.model_validate(teacher),
+    )
+
+
+@teacher_router.post("/demo", response_model=TeacherAuthResponse)
+async def demo_teacher_login(db: AsyncSession = Depends(get_db)) -> TeacherAuthResponse:
+    teacher = await auth_service.ensure_demo_teacher(db)
+    token, session = await auth_service.create_teacher_session(db, teacher)
+    return TeacherAuthResponse(
+        token=token,
+        expires_at=session.expires_at,
+        teacher=TeacherResponse.model_validate(teacher),
+    )
+
+
+@teacher_router.post("/logout", status_code=204)
+async def logout_teacher(
+    authorization: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    token = extract_bearer_token(authorization)
+    if token is not None:
+        await auth_service.revoke_teacher_session(db, token)
+
+
+@teacher_router.get("/me", response_model=TeacherResponse)
+async def teacher_me(current: Teacher = Depends(get_current_teacher)) -> TeacherResponse:
+    return TeacherResponse.model_validate(current)

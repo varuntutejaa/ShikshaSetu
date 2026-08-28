@@ -6,6 +6,18 @@ from pydantic import BaseModel, Field
 from app.schemas.student import StudentResponse
 
 
+class TeacherResponse(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    name: str
+    email: str | None
+    phone: str | None
+    school_name: str | None
+    default_teacher_language: str
+    default_student_language: str
+
+
 class StudentLoginRequest(BaseModel):
     student_id: str = Field(..., min_length=3, max_length=32, description="The student's login ID, e.g. STU1001")
     password: str = Field(..., min_length=4, max_length=128)
@@ -28,3 +40,24 @@ class StudentAuthResponse(BaseModel):
     token: str
     expires_at: datetime
     student: StudentResponse
+
+
+class TeacherLoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=4, max_length=128)
+
+
+class TeacherRegisterRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=4, max_length=128)
+    phone: str | None = Field(default=None, max_length=32)
+    school_name: str | None = Field(default=None, max_length=255)
+    default_teacher_language: str = Field(default="hi", max_length=8)
+    default_student_language: str = Field(default="sat", max_length=8)
+
+
+class TeacherAuthResponse(BaseModel):
+    token: str
+    expires_at: datetime
+    teacher: TeacherResponse
