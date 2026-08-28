@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, XCircle, Mic, Loader2, Bot } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { VIVA_QUESTIONS, STUDENTS, STUDENT_BACKEND_IDS } from "@/lib/mock-data";
+import { VIVA_QUESTIONS } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 import type { VivaConfig } from "@/components/viva/viva-setup";
 import {
@@ -76,20 +76,12 @@ export function VivaSession({
   }, [current]);
   const timeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const student = STUDENTS.find((s) => s.id === config.studentId);
-
   // One-time setup: try a real backend viva session, fall back to the local
   // canned question bank if unavailable. The timed phase machine below does
   // not start until this resolves either way (`ready`), so it never races.
   useEffect(() => {
-    const backendStudentId = STUDENT_BACKEND_IDS[config.studentId];
-    if (!backendStudentId) {
-      const t = setTimeout(() => setReady(true), 0);
-      return () => clearTimeout(t);
-    }
-
     startViva({
-      student_id: backendStudentId,
+      student_id: config.studentId,
       subject: config.subject,
       topic: config.topic,
       language: LANGUAGE_NAME_TO_CODE[config.language] ?? "sat",
@@ -182,7 +174,7 @@ export function VivaSession({
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-medium text-foreground">
-            {student?.name ?? "Student"} · {config.subject}
+            {config.studentName} · {config.subject}
           </p>
           <p className="text-xs text-muted-foreground">{config.topic} · {config.language}</p>
         </div>

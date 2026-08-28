@@ -67,6 +67,11 @@ export const LANGUAGE_NAME_TO_CODE: Record<string, string> = {
   English: "en",
 };
 
+/** Reverse of LANGUAGE_NAME_TO_CODE, for displaying a backend language code. */
+export const LANGUAGE_CODE_TO_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(LANGUAGE_NAME_TO_CODE).map(([name, code]) => [code, name])
+);
+
 // ---------------------------------------------------------------------------
 // Types (mirrors backend/app/schemas/*.py)
 // ---------------------------------------------------------------------------
@@ -402,6 +407,20 @@ export function listStudents(classId?: string): Promise<Student[]> {
 
 export function getStudent(studentId: string): Promise<Student> {
   return apiFetch<Student>(`/api/students/${studentId}`);
+}
+
+export interface StudentAssessmentSummary {
+  id: string;
+  type: "quiz" | "viva";
+  subject: string | null;
+  topic: string | null;
+  score: number | null;
+  total: number | null;
+  date: string;
+}
+
+export function getStudentAssessments(studentId: string): Promise<StudentAssessmentSummary[]> {
+  return apiFetch<StudentAssessmentSummary[]>(`/api/students/${studentId}/assessments`);
 }
 
 export function recordStudentProgress(

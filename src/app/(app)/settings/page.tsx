@@ -16,9 +16,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { TEACHER_NAME, SCHOOL_NAME, LANGUAGES } from "@/lib/mock-data";
+import { LANGUAGES } from "@/lib/mock-data";
+import { LANGUAGE_CODE_TO_NAME } from "@/lib/api";
+import { useTeacherAuth } from "@/lib/teacher-auth";
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
 
 export default function SettingsPage() {
+  const { teacher } = useTeacherAuth();
   const [notifyReports, setNotifyReports] = useState(true);
   const [notifyGaps, setNotifyGaps] = useState(true);
   const [notifyDigest, setNotifyDigest] = useState(false);
@@ -35,27 +47,23 @@ export default function SettingsPage() {
         <div className="flex items-center gap-4 mb-6">
           <Avatar className="h-14 w-14">
             <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
-              AK
+              {teacher ? initials(teacher.name) : "…"}
             </AvatarFallback>
           </Avatar>
-          <Button variant="outline" size="sm">Change Photo</Button>
+          <Button variant="outline" size="sm" disabled>Change Photo</Button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label>Full Name</Label>
-            <Input defaultValue={TEACHER_NAME} />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Employee ID</Label>
-            <Input defaultValue="JH-WSB-0234" />
+            <Input defaultValue={teacher?.name ?? ""} key={teacher?.id ?? "loading"} />
           </div>
           <div className="space-y-1.5">
             <Label>Email</Label>
-            <Input defaultValue="anita.kumari@jhshiksha.gov.in" />
+            <Input defaultValue={teacher?.email ?? ""} key={`${teacher?.id ?? "loading"}-email`} />
           </div>
           <div className="space-y-1.5">
             <Label>Phone</Label>
-            <Input defaultValue="+91 98XXXXXX21" />
+            <Input defaultValue={teacher?.phone ?? ""} key={`${teacher?.id ?? "loading"}-phone`} />
           </div>
         </div>
       </section>
@@ -68,25 +76,33 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5 sm:col-span-2">
             <Label>School</Label>
-            <Input defaultValue={SCHOOL_NAME} />
+            <Input defaultValue={teacher?.school_name ?? ""} key={`${teacher?.id ?? "loading"}-school`} placeholder="Not set" />
           </div>
           <div className="space-y-1.5">
-            <Label>Assigned Class</Label>
-            <Select defaultValue="Class 2">
+            <Label>Default Teacher Language</Label>
+            <Select
+              defaultValue={teacher ? LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] : undefined}
+              key={`${teacher?.id ?? "loading"}-tlang`}
+            >
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {["Class 1", "Class 2", "Class 3", "Class 4", "Class 5"].map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                {LANGUAGES.map((l) => (
+                  <SelectItem key={l} value={l}>{l}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Default Teacher Language</Label>
-            <Select defaultValue="Hindi">
+            <Label>Default Student Language</Label>
+            <Select
+              defaultValue={teacher ? LANGUAGE_CODE_TO_NAME[teacher.default_student_language] : undefined}
+              key={`${teacher?.id ?? "loading"}-slang`}
+            >
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="Hindi">Hindi</SelectItem>
+                {LANGUAGES.map((l) => (
+                  <SelectItem key={l} value={l}>{l}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

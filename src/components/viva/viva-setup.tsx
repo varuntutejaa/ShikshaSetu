@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Mic, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Mic, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -11,11 +11,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CLASSES, SUBJECTS, TOPICS, LANGUAGES, STUDENTS } from "@/lib/mock-data";
+import { CLASSES, SUBJECTS, TOPICS, LANGUAGES } from "@/lib/mock-data";
+import { listStudents, type Student } from "@/lib/api";
 
 export interface VivaConfig {
   studentClass: string;
   studentId: string;
+  studentName: string;
   subject: string;
   topic: string;
   numQuestions: string;
@@ -23,12 +25,32 @@ export interface VivaConfig {
 }
 
 export function VivaSetup({ onStart }: { onStart: (config: VivaConfig) => void }) {
+  const [students, setStudents] = useState<Student[] | null>(null);
   const [studentClass, setStudentClass] = useState("Class 2");
-  const [studentId, setStudentId] = useState(STUDENTS[1].id);
+  const [studentId, setStudentId] = useState("");
   const [subject, setSubject] = useState("Mathematics");
   const [topic, setTopic] = useState("Addition 1–20");
   const [numQuestions, setNumQuestions] = useState("10");
   const [language, setLanguage] = useState("Santhali");
+
+  useEffect(() => {
+    let cancelled = false;
+    listStudents()
+      .then((s) => {
+        if (cancelled) return;
+        setStudents(s);
+        if (s.length > 0) setStudentId(s[0].id);
+      })
+      .catch(() => {
+        if (!cancelled) setStudents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedStudent = students?.find((s) => s.id === studentId);
+  const canStart = !!selectedStudent;
 
   return (
     <div className="rounded-xl border border-border bg-card p-6 sm:p-8 max-w-2xl mx-auto">
@@ -58,14 +80,24 @@ export function VivaSetup({ onStart }: { onStart: (config: VivaConfig) => void }
         </div>
         <div className="space-y-1.5">
           <Label>Student</Label>
-          <Select value={studentId} onValueChange={setStudentId}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {STUDENTS.map((s) => (
-                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {students === null ? (
+            <div className="flex items-center gap-2 h-9 px-3 text-sm text-muted-foreground border border-border rounded-md">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading students…
+            </div>
+          ) : students.length === 0 ? (
+            <p className="text-xs text-muted-foreground h-9 flex items-center">
+              No students yet — register one from the Android app first.
+            </p>
+          ) : (
+            <Select value={studentId} onValueChange={setStudentId}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {students.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label>Subject</Label>
@@ -116,8 +148,18 @@ export function VivaSetup({ onStart }: { onStart: (config: VivaConfig) => void }
       <Button
         size="lg"
         className="w-full h-12 mt-7 gap-2 text-base font-semibold"
+        disabled={!canStart}
         onClick={() =>
-          onStart({ studentClass, studentId, subject, topic, numQuestions, language })
+          selectedStudent &&
+          onStart({
+            studentClass,
+            studentId: selectedStudent.id,
+            studentName: selectedStudent.name,
+            subject,
+            topic,
+            numQuestions,
+            language,
+          })
         }
       >
         <Sparkles className="h-4 w-4" />

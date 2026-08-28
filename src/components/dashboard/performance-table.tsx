@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Table,
@@ -10,17 +13,46 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Progress } from "@/components/ui/progress";
 import { StatusBadge } from "@/components/shared/status-badge";
-import { STUDENTS } from "@/lib/mock-data";
+import { listStudents, LANGUAGE_CODE_TO_NAME, type Student } from "@/lib/api";
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
+function statusFor(overall: number): "On Track" | "Needs Support" | "At Risk" {
+  if (overall >= 75) return "On Track";
+  if (overall >= 60) return "Needs Support";
+  return "At Risk";
+}
 
 export function PerformanceTable() {
-  const rows = STUDENTS.slice(0, 6);
+  const [students, setStudents] = useState<Student[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listStudents()
+      .then((s) => {
+        if (!cancelled) setStudents(s.slice(0, 6));
+      })
+      .catch(() => {
+        if (!cancelled) setStudents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-border">
         <div>
           <h3 className="font-semibold text-foreground">Recent Student Performance</h3>
-          <p className="text-sm text-muted-foreground">Class 2 · Latest assessment results</p>
+          <p className="text-sm text-muted-foreground">Latest assessment results</p>
         </div>
         <Link
           href="/students"
@@ -42,7 +74,21 @@ export function PerformanceTable() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((s) => (
+            {students === null && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-10">
+                  Loading students…
+                </TableCell>
+              </TableRow>
+            )}
+            {students?.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-10">
+                  No students yet — they&apos;ll appear here once registered from the Android app.
+                </TableCell>
+              </TableRow>
+            )}
+            {students?.map((s) => (
               <TableRow key={s.id}>
                 <TableCell>
                   <Link
@@ -51,46 +97,48 @@ export function PerformanceTable() {
                   >
                     <Avatar className="h-8 w-8">
                       <AvatarFallback className="bg-secondary text-secondary-foreground text-xs font-semibold">
-                        {s.avatarInitials}
+                        {initials(s.name)}
                       </AvatarFallback>
                     </Avatar>
                     <div>
                       <p className="text-sm font-medium text-foreground group-hover:text-primary group-hover:underline">
                         {s.name}
                       </p>
-                      <p className="text-xs text-muted-foreground">{s.motherTongue}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {LANGUAGE_CODE_TO_NAME[s.mother_tongue] ?? s.mother_tongue}
+                      </p>
                     </div>
                   </Link>
                 </TableCell>
                 <TableCell className="w-32">
                   <div className="flex items-center gap-2">
-                    <Progress value={s.reading} className="h-1.5" />
+                    <Progress value={s.reading_score} className="h-1.5" />
                     <span className="text-xs text-muted-foreground w-7 tabular-nums">
-                      {s.reading}%
+                      {Math.round(s.reading_score)}%
                     </span>
                   </div>
                 </TableCell>
                 <TableCell className="w-32">
                   <div className="flex items-center gap-2">
-                    <Progress value={s.numeracy} className="h-1.5" />
+                    <Progress value={s.numeracy_score} className="h-1.5" />
                     <span className="text-xs text-muted-foreground w-7 tabular-nums">
-                      {s.numeracy}%
+                      {Math.round(s.numeracy_score)}%
                     </span>
                   </div>
                 </TableCell>
                 <TableCell className="w-32">
                   <div className="flex items-center gap-2">
-                    <Progress value={s.vocabulary} className="h-1.5" />
+                    <Progress value={s.vocabulary_score} className="h-1.5" />
                     <span className="text-xs text-muted-foreground w-7 tabular-nums">
-                      {s.vocabulary}%
+                      {Math.round(s.vocabulary_score)}%
                     </span>
                   </div>
                 </TableCell>
                 <TableCell className="font-semibold text-foreground tabular-nums">
-                  {s.overall}%
+                  {Math.round(s.overall_score)}%
                 </TableCell>
                 <TableCell className="text-right">
-                  <StatusBadge status={s.status} />
+                  <StatusBadge status={statusFor(s.overall_score)} />
                 </TableCell>
               </TableRow>
             ))}

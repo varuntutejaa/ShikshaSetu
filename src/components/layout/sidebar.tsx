@@ -12,6 +12,7 @@ import {
   Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTeacherAuth } from "@/lib/teacher-auth";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { teacher } = useTeacherAuth();
 
   return (
     <aside className="hidden md:flex w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
@@ -71,10 +73,10 @@ export function Sidebar() {
       <div className="px-4 py-4 border-t border-sidebar-border">
         <div className="rounded-lg bg-sidebar-accent/60 px-3 py-3">
           <p className="text-xs font-medium text-sidebar-foreground/90">
-            Govt. Primary School
+            {teacher?.school_name ?? "Add your school in Settings"}
           </p>
           <p className="text-[11px] text-sidebar-foreground/60 mt-0.5">
-            West Singhbhum, Jharkhand
+            {teacher?.name ?? "Signing in…"}
           </p>
         </div>
       </div>

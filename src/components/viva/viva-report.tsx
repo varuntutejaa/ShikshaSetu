@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import type { VivaConfig } from "@/components/viva/viva-setup";
-import { STUDENTS } from "@/lib/mock-data";
 import type { VivaReport as VivaReportData } from "@/lib/api";
 
 const SKILL_BREAKDOWN = [
@@ -27,7 +26,6 @@ export function VivaReport({
   onRestart: () => void;
 }) {
   const incorrect = total - correct;
-  const student = STUDENTS.find((s) => s.id === config.studentId);
   const scorePercent = total > 0 ? Math.round((correct / total) * 100) : 0;
   const skillBreakdown = liveReport
     ? SKILL_BREAKDOWN.map((skill) => ({ ...skill, value: scorePercent }))
@@ -37,7 +35,7 @@ export function VivaReport({
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="text-center">
         <p className="text-sm text-muted-foreground">
-          Viva completed for <span className="font-medium text-foreground">{student?.name}</span>
+          Viva completed for <span className="font-medium text-foreground">{config.studentName}</span>
         </p>
         <h2 className="text-2xl font-semibold text-foreground mt-1">Viva Report</h2>
         {liveReport && (

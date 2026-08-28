@@ -4,49 +4,6 @@ export type RiskLevel = "Low" | "Medium" | "High";
 
 export type StudentStatus = "On Track" | "Needs Support" | "At Risk";
 
-export interface Student {
-  id: string;
-  name: string;
-  avatarInitials: string;
-  class: string;
-  motherTongue: Language;
-  attendance: number; // percentage
-  reading: number; // percentage
-  numeracy: number; // percentage
-  vocabulary: number; // percentage
-  overall: number; // percentage
-  risk: RiskLevel;
-  status: StudentStatus;
-  weakConcepts: string[];
-  aiRecommendation: string;
-}
-
-export interface AssessmentRecord {
-  id: string;
-  studentId: string;
-  type: "Quiz" | "AI Viva";
-  date: string;
-  subject: string;
-  topic: string;
-  score: number;
-  total: number;
-}
-
-export interface LearningGap {
-  concept: string;
-  studentsAffected: number;
-  severity: "Low" | "Medium" | "High";
-}
-
-export interface TodayClass {
-  class: string;
-  subject: string;
-  topic: string;
-  teacherLanguage: Language;
-  studentLanguage: Language;
-  time: string;
-}
-
 export interface QuizQuestion {
   id: string;
   question: string;

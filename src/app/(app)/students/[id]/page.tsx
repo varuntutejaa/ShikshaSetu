@@ -13,35 +13,38 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { RiskBadge, StatusBadge } from "@/components/shared/status-badge";
-import { STUDENTS, ASSESSMENT_HISTORY, STUDENT_BACKEND_IDS } from "@/lib/mock-data";
-import { API_BASE_URL } from "@/lib/api";
+import { RiskBadge } from "@/components/shared/status-badge";
+import {
+  getStudent,
+  getStudentAssessments,
+  getStudentLearningInsights,
+  LANGUAGE_CODE_TO_NAME,
+  ApiError,
+} from "@/lib/api";
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
 
 export default async function StudentProfilePage({
   params,
 }: PageProps<"/students/[id]">) {
   const { id } = await params;
-  const student = STUDENTS.find((s) => s.id === id);
-  if (!student) notFound();
 
-  const history = ASSESSMENT_HISTORY.filter((a) => a.studentId === student.id);
-  const backendId = STUDENT_BACKEND_IDS[student.id];
-  let liveInsights: {
-    weak_concepts: { concept: string; average_score: number }[];
-    strengths: { concept: string; average_score: number }[];
-    recommendation: string;
-    intervention_activity: { activity: string } | null;
-  } | null = null;
-  if (backendId) {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/students/${backendId}/learning-insights`, {
-        cache: "no-store",
-      });
-      if (response.ok) liveInsights = await response.json();
-    } catch {
-      liveInsights = null;
-    }
-  }
+  const student = await getStudent(id).catch((err) => {
+    if (err instanceof ApiError && err.status === 404) notFound();
+    throw err;
+  });
+
+  const [history, insights] = await Promise.all([
+    getStudentAssessments(id).catch(() => []),
+    getStudentLearningInsights(id).catch(() => null),
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
@@ -56,17 +59,16 @@ export default async function StudentProfilePage({
       <div className="rounded-xl border border-border bg-card p-6 flex flex-col sm:flex-row sm:items-center gap-5">
         <Avatar className="h-16 w-16">
           <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
-            {student.avatarInitials}
+            {initials(student.name)}
           </AvatarFallback>
         </Avatar>
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl font-semibold text-foreground">{student.name}</h1>
-            <StatusBadge status={student.status} />
-            <RiskBadge risk={student.risk} />
+            <RiskBadge risk={student.risk_level} />
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            {student.class} · Mother tongue: {student.motherTongue} · Attendance {student.attendance}%
+            Grade {student.grade} · Mother tongue: {LANGUAGE_CODE_TO_NAME[student.mother_tongue] ?? student.mother_tongue} · Attendance {Math.round(student.attendance)}%
           </p>
         </div>
         <Button asChild className="gap-2">
@@ -82,9 +84,9 @@ export default async function StudentProfilePage({
           <div className="rounded-xl border border-border bg-card p-5">
             <h3 className="font-semibold text-foreground mb-4">Learning Progress</h3>
             <div className="space-y-4">
-              <ProgressRow label="Reading" value={student.reading} />
-              <ProgressRow label="Numeracy" value={student.numeracy} />
-              <ProgressRow label="Vocabulary" value={student.vocabulary} />
+              <ProgressRow label="Reading" value={student.reading_score} />
+              <ProgressRow label="Numeracy" value={student.numeracy_score} />
+              <ProgressRow label="Vocabulary" value={student.vocabulary_score} />
             </div>
           </div>
 
@@ -105,15 +107,17 @@ export default async function StudentProfilePage({
                 <TableBody>
                   {history.map((a) => (
                     <TableRow key={a.id}>
-                      <TableCell className="text-sm text-muted-foreground">{a.date}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {new Date(a.date).toLocaleDateString()}
+                      </TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="font-normal">{a.type}</Badge>
+                        <Badge variant="secondary" className="font-normal capitalize">{a.type}</Badge>
                       </TableCell>
                       <TableCell className="text-sm text-foreground/90">
-                        {a.subject} · {a.topic}
+                        {[a.subject, a.topic].filter(Boolean).join(" · ") || "—"}
                       </TableCell>
                       <TableCell className="text-right text-sm font-semibold text-foreground tabular-nums">
-                        {a.score}/{a.total}
+                        {a.score ?? "—"}/{a.total ?? "—"}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -133,15 +137,15 @@ export default async function StudentProfilePage({
         <div className="space-y-6">
           <div className="rounded-xl border border-border bg-card p-5">
             <h3 className="font-semibold text-foreground mb-3">Weak Concepts</h3>
-            {(liveInsights?.weak_concepts.length || student.weakConcepts.length) > 0 ? (
+            {insights && insights.weak_concepts.length > 0 ? (
               <div className="flex flex-wrap gap-2">
-                {(liveInsights?.weak_concepts.map((w) => `${w.concept} ${w.average_score}%`) ?? student.weakConcepts).map((c) => (
+                {insights.weak_concepts.map((w) => (
                   <Badge
-                    key={c}
+                    key={w.concept}
                     variant="outline"
                     className="border-destructive/20 bg-destructive/10 text-destructive font-medium"
                   >
-                    {c}
+                    {w.concept} {w.average_score}%
                   </Badge>
                 ))}
               </div>
@@ -150,11 +154,11 @@ export default async function StudentProfilePage({
             )}
           </div>
 
-          {liveInsights?.strengths && liveInsights.strengths.length > 0 && (
+          {insights && insights.strengths.length > 0 && (
             <div className="rounded-xl border border-border bg-card p-5">
               <h3 className="font-semibold text-foreground mb-3">Strengths</h3>
               <div className="flex flex-wrap gap-2">
-                {liveInsights.strengths.map((s) => (
+                {insights.strengths.map((s) => (
                   <Badge key={s.concept} variant="outline" className="border-success/20 bg-success/10 text-success font-medium">
                     {s.concept} {s.average_score}%
                   </Badge>
@@ -167,9 +171,11 @@ export default async function StudentProfilePage({
             <Lightbulb className="h-5 w-5 text-info shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-info">AI Recommendation</p>
-              <p className="text-sm text-info/90 mt-0.5">{liveInsights?.recommendation ?? student.aiRecommendation}</p>
-              {liveInsights?.intervention_activity && (
-                <p className="text-xs text-info/80 mt-2">{liveInsights.intervention_activity.activity}</p>
+              <p className="text-sm text-info/90 mt-0.5">
+                {insights?.recommendation ?? "No recommendation yet — record a quiz or AI Viva session first."}
+              </p>
+              {insights?.intervention_activity && (
+                <p className="text-xs text-info/80 mt-2">{insights.intervention_activity.activity}</p>
               )}
             </div>
           </div>
@@ -184,7 +190,7 @@ function ProgressRow({ label, value }: { label: string; value: number }) {
     <div>
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-sm text-foreground/90">{label}</span>
-        <span className="text-sm font-medium text-foreground tabular-nums">{value}%</span>
+        <span className="text-sm font-medium text-foreground tabular-nums">{Math.round(value)}%</span>
       </div>
       <Progress value={value} className="h-2.5" />
     </div>

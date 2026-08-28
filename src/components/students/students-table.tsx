@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -21,19 +21,44 @@ import {
 } from "@/components/ui/table";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { RiskBadge } from "@/components/shared/status-badge";
-import { STUDENTS } from "@/lib/mock-data";
+import { listStudents, LANGUAGE_CODE_TO_NAME, type Student } from "@/lib/api";
+
+function initials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
 
 export function StudentsTable() {
+  const [students, setStudents] = useState<Student[] | null>(null);
   const [query, setQuery] = useState("");
   const [riskFilter, setRiskFilter] = useState("all");
 
+  useEffect(() => {
+    let cancelled = false;
+    listStudents()
+      .then((s) => {
+        if (!cancelled) setStudents(s);
+      })
+      .catch(() => {
+        if (!cancelled) setStudents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const filtered = useMemo(() => {
-    return STUDENTS.filter((s) => {
+    if (!students) return [];
+    return students.filter((s) => {
       const matchesQuery = s.name.toLowerCase().includes(query.toLowerCase());
-      const matchesRisk = riskFilter === "all" || s.risk === riskFilter;
+      const matchesRisk = riskFilter === "all" || s.risk_level === riskFilter;
       return matchesQuery && matchesRisk;
     });
-  }, [query, riskFilter]);
+  }, [students, query, riskFilter]);
 
   return (
     <div className="space-y-4">
@@ -60,6 +85,12 @@ export function StudentsTable() {
         </Select>
       </div>
 
+      {students !== null && (
+        <p className="text-sm text-muted-foreground">
+          {students.length} student{students.length === 1 ? "" : "s"} total
+        </p>
+      )}
+
       <div className="rounded-xl border border-border bg-card overflow-hidden">
         <div className="overflow-x-auto">
           <Table>
@@ -76,38 +107,49 @@ export function StudentsTable() {
               </TableRow>
             </TableHeader>
             <TableBody>
+              {students === null && (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-10">
+                    Loading students…
+                  </TableCell>
+                </TableRow>
+              )}
               {filtered.map((s) => (
                 <TableRow key={s.id} className="cursor-pointer">
                   <TableCell>
                     <Link href={`/students/${s.id}`} className="flex items-center gap-3 group">
                       <Avatar className="h-8 w-8">
                         <AvatarFallback className="bg-secondary text-secondary-foreground text-xs font-semibold">
-                          {s.avatarInitials}
+                          {initials(s.name)}
                         </AvatarFallback>
                       </Avatar>
                       <div>
                         <p className="text-sm font-medium text-foreground group-hover:text-primary group-hover:underline">
                           {s.name}
                         </p>
-                        <p className="text-xs text-muted-foreground">{s.class}</p>
+                        <p className="text-xs text-muted-foreground">Grade {s.grade}</p>
                       </div>
                     </Link>
                   </TableCell>
-                  <TableCell className="text-sm text-foreground/80">{s.motherTongue}</TableCell>
-                  <TableCell className="text-sm text-foreground/80 tabular-nums">{s.attendance}%</TableCell>
-                  <TableCell className="text-sm text-foreground/80 tabular-nums">{s.reading}%</TableCell>
-                  <TableCell className="text-sm text-foreground/80 tabular-nums">{s.numeracy}%</TableCell>
-                  <TableCell className="text-sm text-foreground/80 tabular-nums">{s.vocabulary}%</TableCell>
-                  <TableCell className="text-sm font-semibold text-foreground tabular-nums">{s.overall}%</TableCell>
+                  <TableCell className="text-sm text-foreground/80">
+                    {LANGUAGE_CODE_TO_NAME[s.mother_tongue] ?? s.mother_tongue}
+                  </TableCell>
+                  <TableCell className="text-sm text-foreground/80 tabular-nums">{Math.round(s.attendance)}%</TableCell>
+                  <TableCell className="text-sm text-foreground/80 tabular-nums">{Math.round(s.reading_score)}%</TableCell>
+                  <TableCell className="text-sm text-foreground/80 tabular-nums">{Math.round(s.numeracy_score)}%</TableCell>
+                  <TableCell className="text-sm text-foreground/80 tabular-nums">{Math.round(s.vocabulary_score)}%</TableCell>
+                  <TableCell className="text-sm font-semibold text-foreground tabular-nums">{Math.round(s.overall_score)}%</TableCell>
                   <TableCell className="text-right">
-                    <RiskBadge risk={s.risk} />
+                    <RiskBadge risk={s.risk_level} />
                   </TableCell>
                 </TableRow>
               ))}
-              {filtered.length === 0 && (
+              {students !== null && filtered.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-10">
-                    No students match your search.
+                    {students.length === 0
+                      ? "No students yet — they'll appear here once registered from the Android app."
+                      : "No students match your search."}
                   </TableCell>
                 </TableRow>
               )}
