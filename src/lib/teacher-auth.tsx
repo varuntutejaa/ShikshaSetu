@@ -95,6 +95,20 @@ export function useStoredTeacherSession(): StoredSession {
   return useSyncExternalStore(subscribe, readSession, getServerSnapshot);
 }
 
+/** Synchronous, non-reactive localStorage check — deliberately NOT the
+ * hook above. On a hard page load, useSyncExternalStore's first client
+ * render MUST return getServerSnapshot's empty session (matching the
+ * statically-prerendered HTML) even when a real session exists, or React
+ * warns about a hydration mismatch; it only self-corrects on the *next*
+ * render. An effect that fires on that first, transiently-empty render
+ * (e.g. a redirect-to-login gate) would otherwise act on stale data and
+ * navigate away before the correction ever happens. Use this as a guard
+ * immediately before any such one-shot decision. */
+export function hasStoredTeacherSession(): boolean {
+  if (typeof window === "undefined") return false;
+  return !!localStorage.getItem(TOKEN_KEY);
+}
+
 interface TeacherAuthContextValue extends StoredSession {
   /** Called by the login page right after a successful login/signup/demo
    * call so every page reflects it immediately. */

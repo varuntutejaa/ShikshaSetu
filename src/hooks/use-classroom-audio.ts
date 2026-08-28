@@ -5,11 +5,18 @@
  * short segments and streamed over the existing `/ws/classroom/{id}`
  * WebSocket (see backend/app/api/websocket/classroom.py, unchanged).
  *
- * Deliberately independent of use-classroom-video.ts: this hook opens its
- * OWN `getUserMedia({ audio: true })` capture (a second, separate mic
- * stream from whatever the video pipeline publishes), so the two pipelines
- * can fail, reconnect, or be muted/toggled without affecting each other —
- * per the "two independently recoverable pipelines" requirement.
+ * Deliberately independent of use-classroom-video.ts (video's own capture
+ * is always audio:false, so there's no overlap there). It CAN share its
+ * mic stream with use-classroom-call.ts's raw-call pipeline though — pass
+ * one already-acquired MediaStream into both hooks' `start()` (see
+ * live-classroom.tsx) rather than letting each open its own
+ * `getUserMedia({ audio: true })`. Two independent concurrent mic captures
+ * each run their own echo-cancellation/noise-suppression/AGC instance
+ * fighting over the same physical microphone, which is a real, audible
+ * cause of choppy/degraded audio — sharing one stream (each consumer reads
+ * the same track independently; that's standard and well-supported) avoids
+ * it entirely while keeping the pipelines as independently
+ * start/stop/mute-able as before.
  *
  * Two-way: this hook always connects as role="teacher". The backend
  * broadcasts every event to both the teacher and student connections
@@ -77,6 +84,9 @@ export function useClassroomAudio() {
   const mutedRef = useRef(false);
   const socketRef = useRef<ClassroomSocket | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  // Whether THIS hook opened micStreamRef itself (and must stop it) vs. was
+  // handed an already-acquired shared stream (owned/stopped by the caller).
+  const ownsMicStreamRef = useRef(true);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const segmentTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,7 +267,8 @@ export function useClassroomAudio() {
       sessionId: string,
       sourceLanguage: string,
       targetLanguage: string,
-      lessonContext?: Record<string, unknown>
+      lessonContext?: Record<string, unknown>,
+      sharedStream?: MediaStream
     ) => {
       sessionRef.current = { sessionId, source: sourceLanguage, target: targetLanguage };
       contextRef.current = lessonContext ?? null;
@@ -268,13 +279,21 @@ export function useClassroomAudio() {
 
       mimeTypeRef.current = pickSupportedMimeType();
 
-      try {
-        micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {
-        setErrorMessage("Microphone permission denied — AI translation cannot start.");
-        listeningRef.current = false;
-        setPhase("idle");
-        return;
+      if (sharedStream) {
+        micStreamRef.current = sharedStream;
+        ownsMicStreamRef.current = false;
+      } else {
+        try {
+          micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          ownsMicStreamRef.current = true;
+        } catch {
+          setErrorMessage("Microphone permission denied — AI translation cannot start.");
+          listeningRef.current = false;
+          setPhase("idle");
+          return;
+        }
       }
 
       connectSocket(sessionId, sourceLanguage, targetLanguage);
@@ -302,7 +321,9 @@ export function useClassroomAudio() {
     }
     recorderRef.current = null;
 
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    if (ownsMicStreamRef.current) {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    }
     micStreamRef.current = null;
 
     socketRef.current?.close();

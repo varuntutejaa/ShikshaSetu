@@ -2,20 +2,24 @@
 
 /**
  * Raw two-way audio "call" pipeline — NO transcription, NO translation, NO
- * Sarvam AI involved at all. Mic audio is captured as raw PCM16 mono 16kHz,
- * streamed over a dedicated connection to the SAME existing
- * `/ws/classroom/{id}` WebSocket route (no new route — the registry keys by
- * connection identity, not role, so this coexists safely alongside the AI
- * pipeline's own connection; see backend/app/api/websocket/classroom.py's
- * "Raw call mode"). Whatever the other side streams back is played through
+ * Sarvam AI involved at all. Mic audio is captured via an AudioWorklet
+ * (runs on the dedicated audio thread, not main JS — the old
+ * ScriptProcessorNode-based version could glitch/drop samples under main-
+ * thread load, a real cause of choppy audio) inside an AudioContext created
+ * directly at the wire sample rate (16kHz), so the browser's own audio
+ * pipeline does the mic-rate -> 16kHz resampling with a proper anti-
+ * aliasing filter — no hand-rolled resampling on the JS side, which used to
+ * risk aliasing artifacts. Streamed over a dedicated connection to the SAME
+ * existing `/ws/classroom/{id}` WebSocket route (no new route — the
+ * registry keys by connection identity, not role; see
+ * backend/app/api/websocket/classroom.py's "Raw call mode"). Playback uses
  * a jitter-buffered Web Audio scheduler so it sounds like a live call
  * instead of a chunky, delayed loop.
  *
  * Deliberately independent of use-classroom-audio.ts (AI translation) and
  * use-classroom-video.ts (LiveKit video) — a third pipeline you can start
- * or stop on its own. Useful right now specifically because it needs no
- * Sarvam/LiveKit credentials at all — it's a pure byte relay through the
- * backend that's already deployed.
+ * or stop on its own. Can share its mic stream with use-classroom-audio.ts
+ * via `start`'s sharedStream param — see that hook's docstring for why.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,26 +28,13 @@ import { connectClassroomSocket, type ClassroomSocket, type ClassroomRole } from
 export type CallStatus = "idle" | "connecting" | "live" | "reconnecting" | "error";
 
 const SEND_SAMPLE_RATE = 16000;
-const CHUNK_SAMPLES = 4096; // ~256ms at 16kHz — small enough to feel live
 const RECONNECT_DELAY_MS = 2000;
 const SPEAKING_INDICATOR_HOLD_MS = 900;
 
-/** Linear-interpolation downsampler: the mic's native AudioContext sample
- * rate (commonly 48000Hz) down to the fixed 16kHz wire format both sides
- * agree on. */
-function downsampleTo16k(input: Float32Array, inputRate: number): Float32Array {
-  if (inputRate === SEND_SAMPLE_RATE) return input;
-  const ratio = inputRate / SEND_SAMPLE_RATE;
-  const outLength = Math.max(1, Math.floor(input.length / ratio));
-  const output = new Float32Array(outLength);
-  for (let i = 0; i < outLength; i++) {
-    const srcIndex = i * ratio;
-    const i0 = Math.floor(srcIndex);
-    const i1 = Math.min(i0 + 1, input.length - 1);
-    const frac = srcIndex - i0;
-    output[i] = input[i0] * (1 - frac) + input[i1] * frac;
-  }
-  return output;
+type AudioContextCtor = typeof AudioContext;
+
+function getAudioContextCtor(): AudioContextCtor {
+  return window.AudioContext ?? (window as unknown as { webkitAudioContext: AudioContextCtor }).webkitAudioContext;
 }
 
 function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
@@ -56,8 +47,6 @@ function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
   return buffer;
 }
 
-type AudioContextCtor = typeof AudioContext;
-
 export function useClassroomCall() {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -69,9 +58,10 @@ export function useClassroomCall() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const micStreamRef = useRef<MediaStream | null>(null);
+  const ownsMicStreamRef = useRef(true);
   const captureContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const silentGainRef = useRef<GainNode | null>(null);
 
   const playContextRef = useRef<AudioContext | null>(null);
@@ -79,14 +69,13 @@ export function useClassroomCall() {
   const remoteSpeakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const playRawChunk = useCallback((data: ArrayBuffer) => {
-    if (data.byteLength < 3) return; // need at least the speaker byte + 1 sample
+    if (data.byteLength < 3) return;
     const speakerByte = new Uint8Array(data, 0, 1)[0];
     const speaker: ClassroomRole = speakerByte === 0 ? "teacher" : "student";
     const pcm = new Int16Array(data.slice(1));
 
-    const Ctor = (window.AudioContext ?? (window as unknown as { webkitAudioContext: AudioContextCtor }).webkitAudioContext);
     if (!playContextRef.current) {
-      playContextRef.current = new Ctor();
+      playContextRef.current = new (getAudioContextCtor())({ sampleRate: SEND_SAMPLE_RATE });
     }
     const ctx = playContextRef.current;
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
@@ -103,7 +92,9 @@ export function useClassroomCall() {
     // (never earlier than "now"), so chunks play back-to-back with no gaps
     // or overlaps even though they arrive over the network at slightly
     // uneven intervals — this is what makes it sound continuous, like a
-    // call, instead of a series of separate clips.
+    // call, instead of a series of separate clips. If there was a long
+    // stall, nextPlayTimeRef is in the past and this correctly snaps back
+    // to "now" instead of accumulating unbounded lag.
     const startAt = Math.max(ctx.currentTime, nextPlayTimeRef.current);
     source.start(startAt);
     nextPlayTimeRef.current = startAt + audioBuffer.duration;
@@ -145,50 +136,68 @@ export function useClassroomCall() {
   }, [connectSocket]);
 
   const start = useCallback(
-    async (sessionId: string, role: ClassroomRole = "teacher") => {
+    async (sessionId: string, role: ClassroomRole = "teacher", sharedStream?: MediaStream) => {
       sessionRef.current = { sessionId, role };
       activeRef.current = true;
       setErrorMessage(null);
       nextPlayTimeRef.current = 0;
 
-      try {
-        micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {
-        setErrorMessage("Microphone permission denied — live call audio cannot start.");
-        activeRef.current = false;
-        setStatus("error");
-        return;
+      if (sharedStream) {
+        micStreamRef.current = sharedStream;
+        ownsMicStreamRef.current = false;
+      } else {
+        try {
+          micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          ownsMicStreamRef.current = true;
+        } catch {
+          setErrorMessage("Microphone permission denied — live call audio cannot start.");
+          activeRef.current = false;
+          setStatus("error");
+          return;
+        }
       }
 
-      const Ctor = (window.AudioContext ?? (window as unknown as { webkitAudioContext: AudioContextCtor }).webkitAudioContext);
-      const captureContext = new Ctor();
-      captureContextRef.current = captureContext;
+      try {
+        // Creating the AudioContext directly at the wire sample rate means
+        // the browser's own (properly band-limited) resampler handles
+        // mic-native-rate -> 16kHz, instead of a hand-rolled one that risks
+        // aliasing artifacts.
+        const captureContext = new (getAudioContextCtor())({ sampleRate: SEND_SAMPLE_RATE });
+        captureContextRef.current = captureContext;
 
-      const source = captureContext.createMediaStreamSource(micStreamRef.current);
-      sourceNodeRef.current = source;
+        await captureContext.audioWorklet.addModule("/audio/pcm-capture-worklet.js");
 
-      // ScriptProcessorNode is deprecated but universally supported and
-      // simplest for a single self-contained hook (no separate AudioWorklet
-      // module file to load). It only fires reliably once the graph reaches
-      // a destination, so it's routed through a silent gain node — that
-      // keeps it running without playing the local mic back to its own
-      // speakers (which would otherwise be an instant, jarring echo).
-      const processor = captureContext.createScriptProcessor(CHUNK_SAMPLES, 1, 1);
-      processorRef.current = processor;
-      const silentGain = captureContext.createGain();
-      silentGain.gain.value = 0;
-      silentGainRef.current = silentGain;
+        const source = captureContext.createMediaStreamSource(micStreamRef.current);
+        sourceNodeRef.current = source;
 
-      processor.onaudioprocess = (e) => {
-        if (!activeRef.current || !socketRef.current) return;
-        const input = e.inputBuffer.getChannelData(0);
-        const downsampled = downsampleTo16k(input, captureContext.sampleRate);
-        socketRef.current.sendAudioSegment(floatTo16BitPCM(downsampled));
-      };
+        const worklet = new AudioWorkletNode(captureContext, "pcm-capture-processor");
+        workletNodeRef.current = worklet;
+        worklet.port.onmessage = (e: MessageEvent<Float32Array>) => {
+          if (!activeRef.current || !socketRef.current) return;
+          socketRef.current.sendAudioSegment(floatTo16BitPCM(e.data));
+        };
 
-      source.connect(processor);
-      processor.connect(silentGain);
-      silentGain.connect(captureContext.destination);
+        // Route through a silent gain node rather than straight to
+        // destination — keeps the graph "live" on browsers that expect a
+        // path to the output, without playing the local mic back to its
+        // own speakers (which would otherwise be an instant, jarring echo).
+        const silentGain = captureContext.createGain();
+        silentGain.gain.value = 0;
+        silentGainRef.current = silentGain;
+
+        source.connect(worklet);
+        worklet.connect(silentGain);
+        silentGain.connect(captureContext.destination);
+      } catch {
+        setErrorMessage("Could not start live call audio on this browser.");
+        activeRef.current = false;
+        setStatus("error");
+        if (ownsMicStreamRef.current) micStreamRef.current?.getTracks().forEach((t) => t.stop());
+        micStreamRef.current = null;
+        return;
+      }
 
       connectSocket();
     },
@@ -201,8 +210,9 @@ export function useClassroomCall() {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     if (remoteSpeakingTimeoutRef.current) clearTimeout(remoteSpeakingTimeoutRef.current);
 
-    processorRef.current?.disconnect();
-    processorRef.current = null;
+    workletNodeRef.current?.port.close();
+    workletNodeRef.current?.disconnect();
+    workletNodeRef.current = null;
     silentGainRef.current?.disconnect();
     silentGainRef.current = null;
     sourceNodeRef.current?.disconnect();
@@ -210,7 +220,9 @@ export function useClassroomCall() {
     captureContextRef.current?.close().catch(() => {});
     captureContextRef.current = null;
 
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    if (ownsMicStreamRef.current) {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    }
     micStreamRef.current = null;
 
     socketRef.current?.close();

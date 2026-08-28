@@ -1,15 +1,12 @@
 "use client";
 
 /** Real login gate for every (app) route: no session on this device -> sent
- * to /login instead of silently working anyway. See src/lib/teacher-auth.tsx.
- * useTeacherAuth's `teacher` is hydration-safe (useSyncExternalStore under
- * the hood), so it already reflects the real stored session by the time
- * this effect runs — no separate "loading" state needed. */
+ * to /login instead of silently working anyway. See src/lib/teacher-auth.tsx. */
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { useTeacherAuth } from "@/lib/teacher-auth";
+import { useTeacherAuth, hasStoredTeacherSession } from "@/lib/teacher-auth";
 import { Logo } from "@/components/brand/logo";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
@@ -17,7 +14,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!teacher) router.replace("/login");
+    if (teacher) return;
+    // Guard against the one-render transient "no session" that
+    // useStoredTeacherSession's hydration-safe design produces on every
+    // hard page load, even when a real session exists — see
+    // hasStoredTeacherSession's docstring. Without this, a direct
+    // navigation/refresh of any (app) page would bounce to /login and
+    // then straight back to /dashboard before ever reaching the page you
+    // actually asked for.
+    if (hasStoredTeacherSession()) return;
+    router.replace("/login");
   }, [teacher, router]);
 
   if (!teacher) {

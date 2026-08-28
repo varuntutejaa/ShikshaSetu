@@ -95,6 +95,12 @@ export function LiveClassroom() {
   const call = useClassroomCall();
   const sessionIdRef = useRef<string | null>(null);
   const presenceRef = useRef<(WebSocket & { setContent?: (lessonId: string | null, slideIndex: number) => void }) | null>(null);
+  // One real mic capture shared by both audio pipelines (AI translation +
+  // raw call) instead of each opening its own getUserMedia — two
+  // independent concurrent captures fight over echo-cancellation/AGC on
+  // the same physical mic, a real cause of degraded/choppy audio. Owned
+  // here, not by either hook, so it's stopped exactly once.
+  const sharedMicStreamRef = useRef<MediaStream | null>(null);
 
   const listening = audio.phase !== "idle" || starting;
 
@@ -114,11 +120,15 @@ export function LiveClassroom() {
       {
         onEvent(event) {
           if (event.type === "presence_snapshot") setParticipants(event.participants);
-          if (event.type === "participant_joined") {
-            setParticipants((current) => [event.participant, ...current]);
-          }
-          if (event.type === "participant_left") {
-            setParticipants((current) => [event.participant, ...current]);
+          if (event.type === "participant_joined" || event.type === "participant_left") {
+            // Upsert by id — a reconnect or a snapshot arriving close to a
+            // join/leave event can otherwise produce two list entries for
+            // the same participant with the same key (React's "duplicate
+            // key" warning, and the older entry never goes away).
+            setParticipants((current) => [
+              event.participant,
+              ...current.filter((p) => p.id !== event.participant.id),
+            ]);
           }
           if (event.type === "content_changed") {
             setSlideIndex(event.slide_index);
@@ -195,14 +205,27 @@ export function LiveClassroom() {
         learning_objectives: [],
       };
 
+      // One real getUserMedia call, shared by both audio pipelines — see
+      // sharedMicStreamRef above. If this fails (permission denied etc.),
+      // leave it undefined; each hook falls back to requesting its own
+      // stream and surfaces its own error message.
+      try {
+        sharedMicStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      } catch {
+        sharedMicStreamRef.current = null;
+      }
+      const sharedMic = sharedMicStreamRef.current ?? undefined;
+
       // Three independent pipelines, started in parallel — a failure in one
       // (e.g. video unconfigured) never blocks or affects the others. The
       // raw call needs no Sarvam/LiveKit credentials at all — it's a plain
       // audio relay through the backend that's already deployed.
       await Promise.all([
-        audio.start(session.session_id, session.teacher_language, session.student_language, context),
+        audio.start(session.session_id, session.teacher_language, session.student_language, context, sharedMic),
         video.start(session.session_id),
-        call.start(session.session_id, "teacher"),
+        call.start(session.session_id, "teacher", sharedMic),
       ]);
     } catch (err) {
       setSessionError(
@@ -217,6 +240,8 @@ export function LiveClassroom() {
     audio.stop();
     video.stop();
     call.stop();
+    sharedMicStreamRef.current?.getTracks().forEach((t) => t.stop());
+    sharedMicStreamRef.current = null;
     presenceRef.current?.close();
     presenceRef.current = null;
     if (sessionIdRef.current) {
