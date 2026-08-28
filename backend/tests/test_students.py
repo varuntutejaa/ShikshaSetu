@@ -1,3 +1,5 @@
+import app.api.routes.students as students_routes
+from app.core.exceptions import LLMServiceError
 from app.core.security import hash_password
 from app.models.student import Student
 
@@ -48,6 +50,68 @@ async def test_record_and_fetch_progress(client, db_session):
     insights = insights_response.json()
     assert insights["strengths"][0]["concept"] == "Addition"
     assert insights["recommendation"]
+
+
+class _FakeLLMService:
+    """Stands in for the real llm_service so these tests never make a
+    network call to Groq/OpenAI/Sarvam — see app/services/llm_service.py."""
+
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+
+    async def generate_learning_recommendation(self, **kwargs):
+        if self._error:
+            raise self._error
+        return self._result
+
+
+async def test_learning_insights_uses_llm_recommendation_when_available(client, db_session, monkeypatch):
+    student = await _create_student(db_session)
+    await client.post(
+        f"/api/students/{student.id}/progress",
+        json={"event_type": "quiz", "competency": "Addition above 10", "score": 40},
+    )
+
+    fake_result = {
+        "recommendation": "Focus on Addition above 10 with hands-on counting.",
+        "intervention_activity": {
+            "duration_minutes": 7,
+            "language": "sat",
+            "activity": "Count stones together.",
+        },
+    }
+    monkeypatch.setattr(students_routes, "get_llm_service", lambda: _FakeLLMService(result=fake_result))
+
+    response = await client.get(f"/api/students/{student.id}/learning-insights")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recommendation"] == fake_result["recommendation"]
+    assert body["intervention_activity"] == fake_result["intervention_activity"]
+    assert body["recommendation_source"] == "llm"
+
+
+async def test_learning_insights_falls_back_when_llm_fails(client, db_session, monkeypatch):
+    """A Groq/LLM outage must never break this endpoint — it degrades to the
+    deterministic rule-based recommendation instead of a 500."""
+    student = await _create_student(db_session)
+    await client.post(
+        f"/api/students/{student.id}/progress",
+        json={"event_type": "quiz", "competency": "Addition above 10", "score": 40},
+    )
+
+    monkeypatch.setattr(
+        students_routes,
+        "get_llm_service",
+        lambda: _FakeLLMService(error=LLMServiceError("groq unavailable")),
+    )
+
+    response = await client.get(f"/api/students/{student.id}/learning-insights")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recommendation_source"] == "rule_based_fallback"
+    assert "Addition above 10" in body["recommendation"]
+    assert body["intervention_activity"]["duration_minutes"] == 5
 
 
 async def test_student_app_profile_endpoint(client, db_session):

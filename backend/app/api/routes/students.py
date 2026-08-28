@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_student
 from app.core.database import get_db
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import AppError, ForbiddenError, NotFoundError
 from app.models.progress import StudentProgress
 from app.models.quiz import QuizAttempt
 from app.models.student import Student
@@ -22,6 +22,7 @@ from app.schemas.student import (
 from app.schemas.sync import SyncEventIn, SyncResponse
 from app.schemas.viva import VivaQuestionResponse, VivaStartRequest, VivaStartResponse
 from app.services.lesson_service import LessonService, get_lesson_service
+from app.services.llm_service import get_llm_service
 from app.services.quiz_service import QuizService, get_quiz_service
 from app.services.sync_service import SyncService, get_sync_service
 from app.services.viva_service import VivaService, get_viva_service
@@ -137,28 +138,46 @@ async def get_student_learning_insights(student_id: uuid.UUID, db: AsyncSession 
         for concept, scores in concept_scores.items()
         if scores and (sum(scores) / len(scores)) >= 80
     ]
-    weakest = weak[0] if weak else None
-    recommendation = (
-        f"{weakest['concept']} weakness detected at {weakest['average_score']}%. "
-        f"Run a 5-minute {student.mother_tongue} activity using local objects."
-        if weakest
-        else "No persistent learning gap detected from recorded assessments yet."
-    )
-    intervention = (
-        {
-            "duration_minutes": 5,
-            "language": student.mother_tongue,
-            "activity": f"Ask the child to explain 5 examples of {weakest['concept']} in their mother tongue.",
-        }
-        if weakest
-        else None
-    )
+    # AI-generated recommendation (real LLM call when LLM_PROVIDER is
+    # configured — see app/services/llm_service.py; falls back to the
+    # deterministic MockLLMProvider version, never crashes the endpoint,
+    # if the provider is unreachable).
+    try:
+        ai_result = await get_llm_service().generate_learning_recommendation(
+            student_name=student.name,
+            mother_tongue=student.mother_tongue,
+            weak_concepts=weak,
+            strengths=strengths,
+        )
+        recommendation = ai_result.get("recommendation", "")
+        intervention = ai_result.get("intervention_activity")
+        recommendation_source = "llm"
+    except AppError:
+        weakest = weak[0] if weak else None
+        recommendation = (
+            f"{weakest['concept']} weakness detected at {weakest['average_score']}%. "
+            f"Run a 5-minute {student.mother_tongue} activity using local objects."
+            if weakest
+            else "No persistent learning gap detected from recorded assessments yet."
+        )
+        intervention = (
+            {
+                "duration_minutes": 5,
+                "language": student.mother_tongue,
+                "activity": f"Ask the child to explain 5 examples of {weakest['concept']} in their mother tongue.",
+            }
+            if weakest
+            else None
+        )
+        recommendation_source = "rule_based_fallback"
+
     return {
         "student_id": student.id,
         "weak_concepts": weak,
         "strengths": strengths,
         "recommendation": recommendation,
         "intervention_activity": intervention,
+        "recommendation_source": recommendation_source,
         "source": "persistent_progress_events",
     }
 

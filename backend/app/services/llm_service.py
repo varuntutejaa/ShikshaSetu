@@ -59,6 +59,16 @@ class LLMProvider(ABC):
         self, *, question: str, student_answer_text: str, competency: str | None
     ) -> dict[str, Any]: ...
 
+    @abstractmethod
+    async def generate_learning_recommendation(
+        self,
+        *,
+        student_name: str,
+        mother_tongue: str,
+        weak_concepts: list[dict[str, Any]],
+        strengths: list[dict[str, Any]],
+    ) -> dict[str, Any]: ...
+
 
 # ---------------------------------------------------------------------------
 # Mock provider — deterministic, offline, zero cost
@@ -238,6 +248,32 @@ class MockLLMProvider(LLMProvider):
             "competency": competency,
         }
 
+    async def generate_learning_recommendation(
+        self,
+        *,
+        student_name: str,
+        mother_tongue: str,
+        weak_concepts: list[dict[str, Any]],
+        strengths: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not weak_concepts:
+            return {
+                "recommendation": "No persistent learning gap detected from recorded assessments yet.",
+                "intervention_activity": None,
+            }
+        weakest = weak_concepts[0]
+        return {
+            "recommendation": (
+                f"{weakest['concept']} weakness detected at {weakest['average_score']}%. "
+                f"Run a 5-minute {mother_tongue} activity using local objects."
+            ),
+            "intervention_activity": {
+                "duration_minutes": 5,
+                "language": mother_tongue,
+                "activity": f"Ask {student_name} to explain 5 examples of {weakest['concept']} in their mother tongue.",
+            },
+        }
+
 
 # ---------------------------------------------------------------------------
 # OpenAI-compatible provider (OpenAI, Sarvam chat completions, etc.)
@@ -246,11 +282,15 @@ class MockLLMProvider(LLMProvider):
 PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "sarvam": f"{settings.sarvam_base_url}/v1",
+    # Groq hosts an OpenAI-compatible chat-completions API, served by the
+    # same OpenAICompatibleProvider below — no separate client needed.
+    "groq": "https://api.groq.com/openai/v1",
 }
 
 PROVIDER_DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
     "sarvam": "sarvam-105b-conversations",
+    "groq": "llama-3.3-70b-versatile",
 }
 
 
@@ -358,6 +398,34 @@ class OpenAICompatibleProvider(LLMProvider):
         user = f"Question: {question}\nStudent answer: {student_answer_text}\nCompetency: {competency or 'N/A'}"
         return await self._chat_json(system, user)
 
+    async def generate_learning_recommendation(
+        self,
+        *,
+        student_name: str,
+        mother_tongue: str,
+        weak_concepts: list[dict[str, Any]],
+        strengths: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        system = (
+            "You are an instructional coach helping a Hindi-speaking teacher support one "
+            "student in a multilingual Indian primary classroom. You're given that student's "
+            "real, measured weak and strong concepts (average scores from their actual "
+            "recorded quizzes/viva sessions) — never invent concepts not listed. Write a "
+            "short, specific, encouraging recommendation for the teacher (1-2 sentences) and, "
+            "if there is at least one weak concept, one concrete 5-10 minute intervention "
+            "activity using everyday local objects (stones, sticks, seeds, leaves), to be "
+            "conducted in the student's mother tongue. Respond ONLY with a JSON object with "
+            'keys: "recommendation" (string), "intervention_activity" (an object with '
+            '"duration_minutes" (int), "language" (string, the mother tongue), "activity" '
+            '(string) — or null if there are no weak concepts).'
+        )
+        user = (
+            f"Student: {student_name}\nMother tongue: {mother_tongue}\n"
+            f"Weak concepts (concept, average_score%): {weak_concepts}\n"
+            f"Strengths (concept, average_score%): {strengths}"
+        )
+        return await self._chat_json(system, user)
+
 
 class LLMService:
     """Facade the rest of the app depends on."""
@@ -390,6 +458,9 @@ class LLMService:
 
     async def evaluate_viva_answer(self, **kwargs) -> dict[str, Any]:
         return await self._get_provider().evaluate_viva_answer(**kwargs)
+
+    async def generate_learning_recommendation(self, **kwargs) -> dict[str, Any]:
+        return await self._get_provider().generate_learning_recommendation(**kwargs)
 
 
 llm_service = LLMService()
