@@ -75,14 +75,28 @@ export function useClassroomCall() {
   const silentGainRef = useRef<GainNode | null>(null);
 
   const playContextRef = useRef<AudioContext | null>(null);
-  const nextPlayTimeRef = useRef(0);
+  // One playback timeline PER SENDER (keyed by the 2-byte peer id the
+  // backend now tags every raw frame with — see classroom.py's "Raw call
+  // mode"), not one shared timeline for the whole call. With only one
+  // remote peer these are equivalent, but the moment a second student
+  // joins, both send continuous PCM chunks (a worklet posts chunks
+  // whenever unmuted, not just while actually talking) — feeding two
+  // independent streams into one shared `nextPlayTime` serialized them
+  // into a single queue, which is what "echoes badly, repeats" actually
+  // was: peer B's chunks scheduled after whatever backlog peer A had
+  // already queued, instead of playing concurrently. Web Audio mixes
+  // multiple BufferSources connected to the same destination automatically
+  // — all that was ever needed was to stop sharing one clock between them.
+  const nextPlayTimeByPeerRef = useRef<Map<number, number>>(new Map());
   const remoteSpeakingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const playRawChunk = useCallback((data: ArrayBuffer) => {
-    if (data.byteLength < 3) return;
-    const speakerByte = new Uint8Array(data, 0, 1)[0];
+    if (data.byteLength < 4) return;
+    const header = new Uint8Array(data, 0, 3);
+    const speakerByte = header[0];
+    const peerId = (header[1] << 8) | header[2];
     const speaker: ClassroomRole = speakerByte === 0 ? "teacher" : "student";
-    const pcm = new Int16Array(data.slice(1));
+    const pcm = new Int16Array(data.slice(3));
 
     if (!playContextRef.current) {
       playContextRef.current = new (getAudioContextCtor())({ sampleRate: SEND_SAMPLE_RATE });
@@ -98,16 +112,17 @@ export function useClassroomCall() {
     source.buffer = audioBuffer;
     source.connect(ctx.destination);
 
-    // Jitter buffer: schedule this chunk right after the previous one ends
-    // (never earlier than "now"), so chunks play back-to-back with no gaps
-    // or overlaps even though they arrive over the network at slightly
-    // uneven intervals — this is what makes it sound continuous, like a
-    // call, instead of a series of separate clips. If there was a long
-    // stall, nextPlayTimeRef is in the past and this correctly snaps back
-    // to "now" instead of accumulating unbounded lag.
-    const startAt = Math.max(ctx.currentTime, nextPlayTimeRef.current);
+    // Jitter buffer, per sender: schedule this chunk right after that same
+    // sender's previous chunk ends (never earlier than "now"), so each
+    // peer's own audio plays back-to-back with no gaps — while multiple
+    // peers' streams overlap freely and get mixed by the destination, the
+    // way an actual multi-party call sounds. If one peer stalled, their
+    // own next-play-time is in the past and correctly snaps back to "now"
+    // instead of accumulating unbounded lag.
+    const nextPlayTimeForPeer = nextPlayTimeByPeerRef.current.get(peerId) ?? 0;
+    const startAt = Math.max(ctx.currentTime, nextPlayTimeForPeer);
     source.start(startAt);
-    nextPlayTimeRef.current = startAt + audioBuffer.duration;
+    nextPlayTimeByPeerRef.current.set(peerId, startAt + audioBuffer.duration);
 
     setRemoteSpeaking(speaker);
     if (remoteSpeakingTimeoutRef.current) clearTimeout(remoteSpeakingTimeoutRef.current);
@@ -145,12 +160,48 @@ export function useClassroomCall() {
     connectSocketRef.current = connectSocket;
   }, [connectSocket]);
 
+  const stop = useCallback(() => {
+    activeRef.current = false;
+    sessionRef.current = null;
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (remoteSpeakingTimeoutRef.current) clearTimeout(remoteSpeakingTimeoutRef.current);
+
+    workletNodeRef.current?.port.close();
+    workletNodeRef.current?.disconnect();
+    workletNodeRef.current = null;
+    silentGainRef.current?.disconnect();
+    silentGainRef.current = null;
+    sourceNodeRef.current?.disconnect();
+    sourceNodeRef.current = null;
+    captureContextRef.current?.close().catch(() => {});
+    captureContextRef.current = null;
+
+    if (ownsMicStreamRef.current) {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    }
+    micStreamRef.current = null;
+
+    socketRef.current?.close();
+    socketRef.current = null;
+
+    setStatus("idle");
+    setRemoteSpeaking(null);
+  }, []);
+
   const start = useCallback(
     async (sessionId: string, role: ClassroomRole = "teacher", sharedStream?: MediaStream) => {
+      // Idempotent: if this hook is already mid-call (e.g. a duplicate
+      // invocation from a re-clicked Join button, a component re-render
+      // race, or any other re-entry path), tear down the previous
+      // connection/capture/socket cleanly first instead of leaking it —
+      // a leaked prior connection is exactly what used to keep sending a
+      // second, never-torn-down audio stream into the same session.
+      if (activeRef.current) stop();
+
       sessionRef.current = { sessionId, role };
       activeRef.current = true;
       setErrorMessage(null);
-      nextPlayTimeRef.current = 0;
+      nextPlayTimeByPeerRef.current.clear();
 
       if (sharedStream) {
         micStreamRef.current = sharedStream;
@@ -211,36 +262,8 @@ export function useClassroomCall() {
 
       connectSocket();
     },
-    [connectSocket]
+    [connectSocket, stop]
   );
-
-  const stop = useCallback(() => {
-    activeRef.current = false;
-    sessionRef.current = null;
-    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-    if (remoteSpeakingTimeoutRef.current) clearTimeout(remoteSpeakingTimeoutRef.current);
-
-    workletNodeRef.current?.port.close();
-    workletNodeRef.current?.disconnect();
-    workletNodeRef.current = null;
-    silentGainRef.current?.disconnect();
-    silentGainRef.current = null;
-    sourceNodeRef.current?.disconnect();
-    sourceNodeRef.current = null;
-    captureContextRef.current?.close().catch(() => {});
-    captureContextRef.current = null;
-
-    if (ownsMicStreamRef.current) {
-      micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    }
-    micStreamRef.current = null;
-
-    socketRef.current?.close();
-    socketRef.current = null;
-
-    setStatus("idle");
-    setRemoteSpeaking(null);
-  }, []);
 
   useEffect(() => stop, [stop]); // cleanup on unmount
 

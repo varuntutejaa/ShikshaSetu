@@ -113,8 +113,9 @@ def test_audio_peer_role_defaults_and_direction() -> None:
 
 async def test_audio_session_registry_broadcast_raw_relays_untouched_and_skips_sender() -> None:
     """Raw call mode: bytes go out exactly as received (no STT/translate/TTS
-    touches them), tagged with a 1-byte speaker prefix, to every OTHER peer —
-    never echoed back to whoever sent them, or they'd hear their own voice."""
+    touches them), tagged with a 1-byte speaker prefix + 2-byte peer id, to
+    every OTHER peer — never echoed back to whoever sent them, or they'd
+    hear their own voice."""
     registry = AudioSessionRegistry()
     teacher_socket, student_socket = _FakeWebSocket(), _FakeWebSocket()
     teacher = AudioPeer(teacher_socket, role="teacher")  # type: ignore[arg-type]
@@ -123,14 +124,42 @@ async def test_audio_session_registry_broadcast_raw_relays_untouched_and_skips_s
     registry.register("call-session", student)
 
     raw_pcm = b"\x01\x02\x03\x04"
+    teacher_id_bytes = teacher.peer_id.to_bytes(2, "big")
+    student_id_bytes = student.peer_id.to_bytes(2, "big")
     await registry.broadcast_raw("call-session", teacher, raw_pcm)
 
     assert teacher_socket.sent_bytes == []  # sender never gets its own audio back
-    assert student_socket.sent_bytes == [b"\x00" + raw_pcm]  # 0x00 = teacher spoke
+    assert student_socket.sent_bytes == [b"\x00" + teacher_id_bytes + raw_pcm]  # 0x00 = teacher spoke
 
     await registry.broadcast_raw("call-session", student, raw_pcm)
-    assert student_socket.sent_bytes == [b"\x00" + raw_pcm]  # unchanged
-    assert teacher_socket.sent_bytes == [b"\x01" + raw_pcm]  # 0x01 = student spoke
+    assert student_socket.sent_bytes == [b"\x00" + teacher_id_bytes + raw_pcm]  # unchanged
+    assert teacher_socket.sent_bytes == [b"\x01" + student_id_bytes + raw_pcm]  # 0x01 = student spoke
+
+
+async def test_audio_session_registry_broadcast_raw_gives_each_peer_a_distinct_id() -> None:
+    """Two students in the same session are both role="student" — the peer
+    id (not the role byte) is what a receiving client needs to tell their
+    audio streams apart and avoid serializing both into one playback
+    timeline (the real cause of garbled/overlapping audio with 3+ peers)."""
+    registry = AudioSessionRegistry()
+    teacher_socket = _FakeWebSocket()
+    student_a_socket, student_b_socket = _FakeWebSocket(), _FakeWebSocket()
+    teacher = AudioPeer(teacher_socket, role="teacher")  # type: ignore[arg-type]
+    student_a = AudioPeer(student_a_socket, role="student")  # type: ignore[arg-type]
+    student_b = AudioPeer(student_b_socket, role="student")  # type: ignore[arg-type]
+    registry.register("multi-session", teacher)
+    registry.register("multi-session", student_a)
+    registry.register("multi-session", student_b)
+
+    assert student_a.peer_id != student_b.peer_id  # distinct even though same role
+
+    raw_pcm = b"\xaa\xbb"
+    await registry.broadcast_raw("multi-session", student_a, raw_pcm)
+
+    expected = b"\x01" + student_a.peer_id.to_bytes(2, "big") + raw_pcm
+    assert teacher_socket.sent_bytes == [expected]
+    assert student_b_socket.sent_bytes == [expected]  # student B hears student A, tagged with A's id
+    assert student_a_socket.sent_bytes == []  # never echoed back to sender
 
 
 def test_classroom_websocket_raw_call_mode_bypasses_ai_pipeline() -> None:

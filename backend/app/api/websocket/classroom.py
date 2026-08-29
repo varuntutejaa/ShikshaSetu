@@ -53,10 +53,18 @@ actual phone call. Set `"raw_call": true` in the config message; every
 binary frame that connection sends afterwards is treated as a raw PCM16
 mono 16kHz audio chunk and is relayed as-is (not transcribed, not
 translated, not re-encoded) to every OTHER connection on this session_id
-as a binary frame: one leading byte (0 = sent by a "teacher" peer, 1 =
-sent by a "student" peer) followed by the original PCM bytes. The sender
-never gets its own audio echoed back. This mode is completely independent
-of MOCK_MODE/Sarvam/LiveKit configuration — it's a pure byte relay.
+as a binary frame: a 3-byte header — one role byte (0 = sent by a
+"teacher" peer, 1 = sent by a "student" peer) followed by a 2-byte
+big-endian peer id unique to the sending connection — then the original
+PCM bytes. The peer id (not just the role byte) matters as soon as more
+than 2 connections share a session: with 2+ students both tagged
+"student", a receiving client needs a per-*connection* key, not just a
+per-*role* one, to keep each sender's audio on its own playback timeline
+instead of serializing every sender's chunks into one queue (which is
+exactly what produced garbled/overlapping audio before this existed — see
+frontend's use-classroom-call.ts). The sender never gets its own audio
+echoed back. This mode is completely independent of MOCK_MODE/Sarvam/
+LiveKit configuration — it's a pure byte relay.
 """
 
 import base64
@@ -123,6 +131,12 @@ class AudioPeer:
         # from this connection bypass STT/translate/TTS entirely and are
         # just relayed to the other peer(s) as raw audio bytes.
         self.raw_call = False
+        # Stable per-connection id sent in every relayed raw-audio frame so
+        # a receiving client can tell multiple same-role senders (e.g. two
+        # students) apart and give each its own playback timeline. Just the
+        # low 16 bits of the connection's identity — unique enough for the
+        # handful of peers a single classroom session actually has.
+        self.peer_id = id(websocket) & 0xFFFF
 
     @property
     def direction(self) -> str:
@@ -189,7 +203,7 @@ class AudioSessionRegistry:
         """Relay a raw call audio chunk to every OTHER peer — never echoed
         back to the sender, or you'd hear your own voice looped back."""
         speaker_byte = b"\x00" if sender.role == "teacher" else b"\x01"
-        payload = speaker_byte + data
+        payload = speaker_byte + sender.peer_id.to_bytes(2, "big") + data
         for peer in self.peers(session_id):
             if peer is sender:
                 continue
