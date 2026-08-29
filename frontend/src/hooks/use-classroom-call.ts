@@ -20,6 +20,11 @@
  * use-classroom-video.ts (LiveKit video) — a third pipeline you can start
  * or stop on its own. Can share its mic stream with use-classroom-audio.ts
  * via `start`'s sharedStream param — see that hook's docstring for why.
+ *
+ * `muted` genuinely silences this pipeline: the worklet still captures
+ * (so unmuting is instant, no re-negotiation), it just stops sending
+ * chunks to the socket while muted — this is the audio the teacher and
+ * student actually hear, so this is what the UI's Mute button controls.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -51,8 +56,13 @@ export function useClassroomCall() {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [remoteSpeaking, setRemoteSpeaking] = useState<ClassroomRole | null>(null);
+  const [muted, setMuted] = useState(false);
 
   const activeRef = useRef(false);
+  const mutedRef = useRef(false);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
   const socketRef = useRef<ClassroomSocket | null>(null);
   const sessionRef = useRef<{ sessionId: string; role: ClassroomRole } | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -175,7 +185,7 @@ export function useClassroomCall() {
         const worklet = new AudioWorkletNode(captureContext, "pcm-capture-processor");
         workletNodeRef.current = worklet;
         worklet.port.onmessage = (e: MessageEvent<Float32Array>) => {
-          if (!activeRef.current || !socketRef.current) return;
+          if (!activeRef.current || !socketRef.current || mutedRef.current) return;
           socketRef.current.sendAudioSegment(floatTo16BitPCM(e.data));
         };
 
@@ -234,5 +244,5 @@ export function useClassroomCall() {
 
   useEffect(() => stop, [stop]); // cleanup on unmount
 
-  return { status, errorMessage, remoteSpeaking, start, stop };
+  return { status, errorMessage, remoteSpeaking, muted, setMuted, start, stop };
 }

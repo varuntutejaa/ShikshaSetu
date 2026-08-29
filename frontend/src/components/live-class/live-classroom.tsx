@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   Mic,
   MicOff,
-  Pause,
   History,
   PhoneOff,
   Wifi,
@@ -19,6 +18,7 @@ import {
   Smartphone,
   PhoneCall,
   Ear,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,7 +35,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -67,19 +66,27 @@ import { useClassroomCall } from "@/hooks/use-classroom-call";
 // coming from the dashboard's demo dataset.
 const TEACHER_LANGUAGE = "Hindi";
 
+// A live class runs for a fixed 60 minutes, then ends itself automatically.
+const CLASS_DURATION_SEC = 60 * 60;
+
+function formatDuration(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 export function LiveClassroom() {
   const [className, setClassName] = useState("");
   const [grade, setGrade] = useState("Class 2");
   const [subjectFocus, setSubjectFocus] = useState("Mathematics");
   const [studentLanguage, setStudentLanguage] = useState("Santhali");
-  const [showTranscript, setShowTranscript] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [classroom, setClassroom] = useState<Classroom | null>(null);
   const [joinCode, setJoinCode] = useState("");
   const [studentName, setStudentName] = useState("");
-  const [creatingClass, setCreatingClass] = useState(false);
   const [joiningClass, setJoiningClass] = useState(false);
+  const [timeRemainingSec, setTimeRemainingSec] = useState<number | null>(null);
   const [participants, setParticipants] = useState<ClassroomParticipant[]>([]);
   const [classHistory, setClassHistory] = useState<ClassSession[]>([]);
   const [lessonId, setLessonId] = useState("");
@@ -101,8 +108,10 @@ export function LiveClassroom() {
   // the same physical mic, a real cause of degraded/choppy audio. Owned
   // here, not by either hook, so it's stopped exactly once.
   const sharedMicStreamRef = useRef<MediaStream | null>(null);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const listening = audio.phase !== "idle" || starting;
+  const micMuted = audio.muted;
 
   useEffect(() => {
     listClassroomSessions()
@@ -111,6 +120,13 @@ export function LiveClassroom() {
         // History is helpful context, but should never block the live room.
       });
   }, []);
+
+  useEffect(
+    () => () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    },
+    []
+  ); // clear the countdown on unmount
 
   function openPresence(sessionId: string, name = "Teacher") {
     presenceRef.current?.close();
@@ -151,18 +167,77 @@ export function LiveClassroom() {
     };
   }
 
+  function startTimer() {
+    setTimeRemainingSec(CLASS_DURATION_SEC);
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    timerIntervalRef.current = setInterval(() => {
+      setTimeRemainingSec((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+          timerIntervalRef.current = null;
+          handleEndClass();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  // Create Class goes straight live — no separate "start" step: creates the
+  // classroom, starts its session, and immediately turns on the mic and
+  // camera (three independent pipelines: AI translation, LiveKit video, and
+  // the real raw voice call — a failure in one never blocks the others).
   async function handleCreateClass() {
-    setCreatingClass(true);
+    setStarting(true);
     setSessionError(null);
     try {
-      const created = await createClassroom(buildClassInput());
+      const created = classroom ?? (await createClassroom(buildClassInput()));
       setClassroom(created);
       setJoinCode(created.class_code);
+
+      const session = await startClassroom(created.id);
+      sessionIdRef.current = session.session_id;
+      openPresence(session.session_id);
+      const context = lessonContext ?? {
+        class: created.name,
+        subject: created.subject_focus,
+        topic: created.subject_focus,
+        activity: "Live classroom explanation",
+        learning_objectives: [],
+      };
+
+      // One real getUserMedia call, shared by both audio pipelines — see
+      // sharedMicStreamRef above. If this fails (permission denied etc.),
+      // leave it undefined; each hook falls back to requesting its own
+      // stream and surfaces its own error message.
+      try {
+        sharedMicStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      } catch {
+        sharedMicStreamRef.current = null;
+      }
+      const sharedMic = sharedMicStreamRef.current ?? undefined;
+
+      await Promise.all([
+        audio.start(session.session_id, session.teacher_language, session.student_language, context, sharedMic),
+        video.start(session.session_id),
+        call.start(session.session_id, "teacher", sharedMic),
+      ]);
+
+      startTimer();
     } catch (err) {
-      setSessionError(err instanceof ApiError ? err.message : "Could not create class.");
+      setSessionError(err instanceof ApiError ? err.message : "Could not start the class.");
     } finally {
-      setCreatingClass(false);
+      setStarting(false);
     }
+  }
+
+  function handleToggleMute() {
+    const next = !micMuted;
+    audio.setMuted(next);
+    call.setMuted(next);
   }
 
   async function handleJoinClass() {
@@ -187,61 +262,17 @@ export function LiveClassroom() {
     }
   }
 
-  async function handleStart() {
-    setStarting(true);
-    setSessionError(null);
-    try {
-      const classForSession = classroom ?? (await createClassroom(buildClassInput()));
-      setClassroom(classForSession);
-      setJoinCode(classForSession.class_code);
-      const session = await startClassroom(classForSession.id);
-      sessionIdRef.current = session.session_id;
-      openPresence(session.session_id);
-      const context = lessonContext ?? {
-        class: classForSession.name,
-        subject: classForSession.subject_focus,
-        topic: classForSession.subject_focus,
-        activity: "Live classroom explanation",
-        learning_objectives: [],
-      };
-
-      // One real getUserMedia call, shared by both audio pipelines — see
-      // sharedMicStreamRef above. If this fails (permission denied etc.),
-      // leave it undefined; each hook falls back to requesting its own
-      // stream and surfaces its own error message.
-      try {
-        sharedMicStreamRef.current = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-      } catch {
-        sharedMicStreamRef.current = null;
-      }
-      const sharedMic = sharedMicStreamRef.current ?? undefined;
-
-      // Three independent pipelines, started in parallel — a failure in one
-      // (e.g. video unconfigured) never blocks or affects the others. The
-      // raw call needs no Sarvam/LiveKit credentials at all — it's a plain
-      // audio relay through the backend that's already deployed.
-      await Promise.all([
-        audio.start(session.session_id, session.teacher_language, session.student_language, context, sharedMic),
-        video.start(session.session_id),
-        call.start(session.session_id, "teacher", sharedMic),
-      ]);
-    } catch (err) {
-      setSessionError(
-        err instanceof ApiError ? err.message : "Could not reach the ShikshaSetu backend."
-      );
-    } finally {
-      setStarting(false);
-    }
-  }
-
   async function handleEndClass() {
     audio.stop();
     video.stop();
     call.stop();
     sharedMicStreamRef.current?.getTracks().forEach((t) => t.stop());
     sharedMicStreamRef.current = null;
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    setTimeRemainingSec(null);
     presenceRef.current?.close();
     presenceRef.current = null;
     if (sessionIdRef.current) {
@@ -252,14 +283,6 @@ export function LiveClassroom() {
     }
     setParticipants([]);
     listClassroomSessions(classroom?.id).then(setClassHistory).catch(() => {});
-  }
-
-  function handleToggleListening() {
-    if (listening) {
-      handleEndClass();
-    } else {
-      handleStart();
-    }
   }
 
   async function handleLoadLesson() {
@@ -393,6 +416,20 @@ export function LiveClassroom() {
                   ? "Live Call Reconnecting…"
                   : "Live Call Off"}
           </Badge>
+          {timeRemainingSec !== null && (
+            <Badge
+              variant="outline"
+              className={cn(
+                "gap-1.5 py-1.5 px-3 tabular-nums",
+                timeRemainingSec <= 300
+                  ? "border-destructive/30 bg-destructive/10 text-destructive"
+                  : "border-border bg-muted/40 text-muted-foreground"
+              )}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              {formatDuration(timeRemainingSec)} left
+            </Badge>
+          )}
           <Sheet>
             <SheetTrigger asChild>
               <Button variant="outline" size="sm" className="gap-1.5">
@@ -521,9 +558,9 @@ export function LiveClassroom() {
             />
           </div>
           <div className="flex gap-2">
-            <Button onClick={handleCreateClass} disabled={creatingClass || !!classroom || listening} className="gap-2">
+            <Button onClick={handleCreateClass} disabled={starting || !!classroom || listening} className="gap-2">
               <UserPlus className="h-4 w-4" />
-              {creatingClass ? "Creating…" : "Create Class"}
+              {starting ? "Starting…" : "Create Class"}
             </Button>
             <Button onClick={handleJoinClass} disabled={joiningClass || !joinCode || listening} variant="outline">
               {joiningClass ? "Joining…" : "Join Class"}
@@ -616,51 +653,52 @@ export function LiveClassroom() {
           </Badge>
         </div>
 
-        {/* Central mic interface */}
+        {/* Central mic interface — tap to mute/unmute. Starting the class
+            itself happens from Create Class above, not here. */}
         <div className="flex flex-1 flex-col items-center justify-center py-4 sm:py-6 w-full">
-          <button
-            onClick={handleToggleListening}
-            aria-label={listening ? "End Live Class" : "Start Live Class"}
-            disabled={starting}
-            className={cn(
-              "relative flex h-28 w-28 sm:h-32 sm:w-32 items-center justify-center rounded-full transition-colors",
-              listening
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground hover:bg-muted/70",
-              starting && "opacity-70"
-            )}
-          >
-            {listening && (
-              <span className="absolute inset-0 rounded-full animate-pulse-ring" />
-            )}
-            {listening ? (
-              <Mic className="h-11 w-11 sm:h-12 sm:w-12" />
-            ) : (
-              <Pause className="h-11 w-11 sm:h-12 sm:w-12" />
-            )}
-          </button>
-          <p className="mt-4 text-lg font-semibold text-foreground text-center">
-            {starting
-              ? "Starting Live Class…"
-              : !listening
-                ? "Tap to Start Live Class"
-                : audio.muted
-                  ? "🔇 Microphone Muted"
-                  : audio.phase === "translating"
-                    ? "⚡ Translating…"
-                    : "🎙️ Listening"}
-          </p>
-          <div className="mt-2">
-            <Waveform active={listening && !audio.muted && audio.phase !== "idle"} />
-          </div>
-          {listening && !audio.muted && audio.latencyMs !== null && (
-            <p
-              className={cn(
-                "mt-1 text-xs",
-                audio.isLatencyHigh ? "text-destructive font-medium" : "text-muted-foreground"
+          {listening ? (
+            <>
+              <button
+                onClick={handleToggleMute}
+                aria-label={micMuted ? "Unmute microphone" : "Mute microphone"}
+                className={cn(
+                  "relative flex h-28 w-28 sm:h-32 sm:w-32 items-center justify-center rounded-full transition-colors",
+                  micMuted
+                    ? "bg-muted text-muted-foreground hover:bg-muted/70"
+                    : "bg-primary text-primary-foreground"
+                )}
+              >
+                {!micMuted && (
+                  <span className="absolute inset-0 rounded-full animate-pulse-ring" />
+                )}
+                {micMuted ? (
+                  <MicOff className="h-11 w-11 sm:h-12 sm:w-12" />
+                ) : (
+                  <Mic className="h-11 w-11 sm:h-12 sm:w-12" />
+                )}
+              </button>
+              <p className="mt-4 text-lg font-semibold text-foreground text-center">
+                {micMuted ? "🔇 Muted — tap to unmute" : "🎙️ Live — tap to mute"}
+              </p>
+              <div className="mt-2">
+                <Waveform active={!micMuted} />
+              </div>
+              {!micMuted && audio.latencyMs !== null && (
+                <p
+                  className={cn(
+                    "mt-1 text-xs",
+                    audio.isLatencyHigh ? "text-destructive font-medium" : "text-muted-foreground"
+                  )}
+                >
+                  {audio.isLatencyHigh ? "⚠️" : "⚡"} Translation latency: {(audio.latencyMs / 1000).toFixed(1)}s
+                </p>
               )}
-            >
-              {audio.isLatencyHigh ? "⚠️" : "⚡"} Translation latency: {(audio.latencyMs / 1000).toFixed(1)}s
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center max-w-xs">
+              {starting
+                ? "Starting live class…"
+                : "Fill in the class details above and click Create Class to go live — your microphone and camera start automatically."}
             </p>
           )}
         </div>
@@ -761,43 +799,17 @@ export function LiveClassroom() {
         </div>
       </div>
 
-      {/* Live transcript */}
-      {showTranscript && (
-        <div className="rounded-xl border border-border bg-muted/40 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-            Live Transcript
-          </p>
-          <div className="flex flex-wrap gap-x-1.5 gap-y-1 text-sm text-foreground/80">
-            {isTeacherTextVisible ? (
-              <span>{audio.teacherText}</span>
-            ) : (
-              <span className="text-muted-foreground">Transcript will stream here as the teacher speaks.</span>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Controls */}
       <div className="rounded-xl border border-border bg-card p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3 flex-wrap">
           <Button
-            onClick={handleToggleListening}
-            variant={listening ? "outline" : "default"}
-            disabled={starting}
-            className="gap-2"
-          >
-            {listening ? <Pause className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            {listening ? "Stop Microphone" : "Start Microphone"}
-          </Button>
-
-          <Button
-            onClick={() => audio.setMuted((m) => !m)}
+            onClick={handleToggleMute}
             variant="outline"
             className="gap-2"
             disabled={!listening}
           >
-            {audio.muted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            {audio.muted ? "Unmute" : "Mute"}
+            {micMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            {micMuted ? "Unmute" : "Mute"}
           </Button>
 
           <Button
@@ -809,17 +821,6 @@ export function LiveClassroom() {
             {video.cameraOn ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
             {video.cameraOn ? "Camera On" : "Camera Off"}
           </Button>
-
-          <div className="flex items-center gap-2 pl-1">
-            <Switch
-              id="transcript"
-              checked={showTranscript}
-              onCheckedChange={setShowTranscript}
-            />
-            <Label htmlFor="transcript" className="text-sm text-muted-foreground">
-              Live transcript
-            </Label>
-          </div>
         </div>
 
         <Button asChild variant="destructive" className="gap-2" onClick={handleEndClass}>

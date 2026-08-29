@@ -2,3 +2,7 @@
 # stack-specific build artifacts (node_modules, .next, __pycache__, etc.).
 .DS_Store
 *.pem
+
+# Vercel CLI project link — lives at repo root since `vercel` must be run
+# from here (its Root Directory project setting is "frontend").
+.vercel
