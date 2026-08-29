@@ -2,8 +2,19 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Bell, ChevronDown, LogOut, Settings, User } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  LayoutDashboard,
+  Zap,
+  BookOpen,
+  Mic,
+  GraduationCap,
+  Settings,
+  Bell,
+  ChevronDown,
+  LogOut,
+  User,
+} from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,9 +32,19 @@ import {
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { logoutTeacher, LANGUAGE_CODE_TO_NAME } from "@/lib/api";
 import { useTeacherAuth } from "@/lib/teacher-auth";
 import { Logo } from "@/components/brand/logo";
+
+const NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/live-class", label: "Live Class", icon: Zap },
+  { href: "/lessons", label: "Lessons", icon: BookOpen },
+  { href: "/viva", label: "AI Viva", icon: Mic },
+  { href: "/students", label: "Students", icon: GraduationCap },
+  { href: "/settings", label: "Settings", icon: Settings },
+];
 
 const NOTIFICATIONS = [
   {
@@ -55,10 +76,12 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-export function Header() {
+export function TopNav() {
+  const pathname = usePathname();
   const router = useRouter();
   const { teacher, token, clearSession } = useTeacherAuth();
   const [interfaceLanguage, setInterfaceLanguage] = useState("Hindi");
+
   const teacherName = teacher?.name ?? "Teacher";
   const schoolName = teacher?.school_name ?? "No school set yet";
   const teacherLang = teacher ? LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] ?? teacher.default_teacher_language : null;
@@ -77,20 +100,39 @@ export function Header() {
   }
 
   return (
-    <header className="h-16 shrink-0 border-b border-border bg-card px-4 md:px-6 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-2 md:hidden">
-        <Logo size={30} />
-        <span className="font-semibold text-sm">ShikshaSetu</span>
-      </div>
+    <header className="h-16 shrink-0 border-b border-border bg-card px-3 sm:px-5 flex items-center gap-3 sm:gap-6">
+      <Link href="/dashboard" className="flex items-center gap-2 shrink-0">
+        <Logo size={32} />
+        <span className="font-semibold text-[15px] text-foreground hidden sm:inline">ShikshaSetu</span>
+      </Link>
 
-      <div className="hidden md:block">
-        <p className="text-sm font-medium text-foreground">{teacherName}</p>
-        <p className="text-xs text-muted-foreground">{schoolName}</p>
-      </div>
+      <nav className="hidden md:flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
+        {NAV_ITEMS.map((item) => {
+          const active = pathname === item.href || pathname?.startsWith(item.href + "/");
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors shrink-0",
+                active
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
 
-      <div className="flex items-center gap-2 md:gap-3">
+      <div className="flex-1 min-w-0 md:hidden" />
+
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         <Select value={interfaceLanguage} onValueChange={setInterfaceLanguage}>
-          <SelectTrigger className="w-[110px] hidden sm:flex" size="sm">
+          <SelectTrigger className="w-[110px] hidden lg:flex" size="sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -131,7 +173,7 @@ export function Header() {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 rounded-full pl-1 pr-2 py-1 hover:bg-muted transition-colors">
+            <button className="flex items-center gap-1.5 sm:gap-2 rounded-full pl-1 pr-1.5 sm:pr-2 py-1 hover:bg-muted transition-colors">
               <Avatar className="h-8 w-8">
                 <AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">
                   {teacher ? initials(teacher.name) : "…"}
