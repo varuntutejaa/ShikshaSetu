@@ -859,123 +859,191 @@ function LobbyView({
   onJoinClass,
 }: LobbyViewProps) {
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-lg px-4 py-10 sm:py-16">
-        <div className="text-center mb-7">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-            <Video className="h-6 w-6" />
-          </div>
-          <h1 className="text-2xl font-semibold text-foreground">Start a Live Class</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+    <div className="h-full flex flex-col overflow-y-auto lg:overflow-hidden px-4 sm:px-6 py-4 sm:py-6">
+      <div className="shrink-0 flex items-center gap-3 mb-4">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary shrink-0">
+          <Video className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-foreground leading-tight">Start a Live Class</h1>
+          <p className="text-sm text-muted-foreground leading-tight">
             {TEACHER_LANGUAGE} → {studentLanguage}, translated live for your students
           </p>
         </div>
+      </div>
 
-        {sessionError && (
-          <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-sm text-destructive flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            {sessionError}
-          </div>
-        )}
+      {sessionError && (
+        <div className="shrink-0 mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-sm text-destructive flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {sessionError}
+        </div>
+      )}
 
-        <div className="rounded-2xl border border-border bg-card p-5 sm:p-6 space-y-4">
-          <div>
-            <Label htmlFor="class-name" className="text-sm font-medium">
-              Class Name
-            </Label>
-            <Input
-              id="class-name"
-              value={className}
-              onChange={(event) => setClassName(event.target.value)}
-              placeholder="e.g. Morning Batch"
-              disabled={!!classroom}
-              className="mt-1"
-            />
+      {/* Parallel cards — everything reachable at a glance, no scrolling to
+          find a feature. Each card scrolls internally only if its own
+          content overflows (e.g. a long recent-classes list). */}
+      <div className="lg:flex-1 lg:min-h-0 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr_1fr] gap-4">
+        {/* Create Class — primary action, visually emphasized */}
+        <div className="rounded-2xl border-2 border-primary/20 bg-card p-5 flex flex-col lg:min-h-0">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+              <Video className="h-3.5 w-3.5" />
+            </div>
+            <h2 className="text-sm font-semibold text-foreground">Create Class</h2>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+
+          <div className="lg:flex-1 lg:min-h-0 lg:overflow-y-auto space-y-3.5 pr-0.5">
             <div>
-              <Label className="text-sm font-medium">Grade</Label>
-              <Select value={grade} onValueChange={setGrade} disabled={!!classroom}>
+              <Label htmlFor="class-name" className="text-xs font-medium">
+                Class Name
+              </Label>
+              <Input
+                id="class-name"
+                value={className}
+                onChange={(event) => setClassName(event.target.value)}
+                placeholder="e.g. Morning Batch"
+                disabled={!!classroom}
+                className="mt-1"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <Label className="text-xs font-medium">Grade</Label>
+                <Select value={grade} onValueChange={setGrade} disabled={!!classroom}>
+                  <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {CLASSES.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs font-medium">Subject</Label>
+                <Select value={subjectFocus} onValueChange={setSubjectFocus} disabled={!!classroom}>
+                  <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {SUBJECTS.map((s) => (
+                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs font-medium">Student Language</Label>
+              <Select value={studentLanguage} onValueChange={setStudentLanguage} disabled={!!classroom}>
                 <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {CLASSES.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
+                  <SelectItem value="Ho">Ho</SelectItem>
+                  <SelectItem value="Mundari">Mundari</SelectItem>
+                  <SelectItem value="Santhali">Santhali</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label className="text-sm font-medium">Subject</Label>
-              <Select value={subjectFocus} onValueChange={setSubjectFocus} disabled={!!classroom}>
-                <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {SUBJECTS.map((s) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className="rounded-lg bg-muted/40 p-3 space-y-1.5">
+              <p className="text-xs font-medium text-foreground">What happens when you create it</p>
+              <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
+                <li>Your mic and camera turn on instantly</li>
+                <li>Speech is translated live for students</li>
+                <li>The class runs for 60 minutes</li>
+              </ul>
             </div>
           </div>
-          <div>
-            <Label className="text-sm font-medium">Student Language</Label>
-            <Select value={studentLanguage} onValueChange={setStudentLanguage} disabled={!!classroom}>
-              <SelectTrigger className="w-full mt-1"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Ho">Ho</SelectItem>
-                <SelectItem value="Mundari">Mundari</SelectItem>
-                <SelectItem value="Santhali">Santhali</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
 
-          <Button onClick={onCreateClass} disabled={starting} size="lg" className="w-full h-12 gap-2 text-base font-semibold">
-            {starting ? "Starting…" : "Create Class"}
-          </Button>
-          <p className="text-xs text-muted-foreground text-center">
-            Your microphone and camera start automatically.
-          </p>
-        </div>
-
-        <div className="relative my-6">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-border" />
-          </div>
-          <div className="relative flex justify-center text-xs">
-            <span className="bg-background px-2.5 text-muted-foreground">or join another class</span>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border bg-card p-5 sm:p-6 space-y-3">
-          <Input
-            value={joinCode}
-            onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-            placeholder="Class code"
-          />
-          <Input
-            value={studentName}
-            onChange={(event) => setStudentName(event.target.value)}
-            placeholder="Your name (for the join flow)"
-          />
-          <Button onClick={onJoinClass} disabled={joiningClass || !joinCode} variant="outline" className="w-full">
-            {joiningClass ? "Joining…" : "Join Class"}
-          </Button>
-        </div>
-
-        {classHistory.length > 0 && (
-          <div className="mt-8">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 px-1">
-              Recent Classes
+          <div className="shrink-0 pt-3.5 mt-1 border-t border-border/70">
+            <Button onClick={onCreateClass} disabled={starting} size="lg" className="w-full h-11 gap-2 font-semibold">
+              {starting ? "Starting…" : "Create Class"}
+            </Button>
+            <p className="text-[11px] text-muted-foreground text-center mt-2">
+              Your microphone and camera start automatically.
             </p>
-            <div className="rounded-xl border border-border bg-card divide-y divide-border">
-              {classHistory.slice(0, 5).map((session) => (
-                <div key={session.session_id} className="flex items-center justify-between text-sm px-3.5 py-2.5">
-                  <span className="text-muted-foreground">{new Date(session.created_at).toLocaleString()}</span>
-                  <Badge variant={session.status === "active" ? "default" : "secondary"}>{session.status}</Badge>
+          </div>
+        </div>
+
+        {/* Join Class */}
+        <div className="rounded-2xl border border-border bg-card p-5 flex flex-col lg:min-h-0">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted text-muted-foreground shrink-0">
+              <Smartphone className="h-3.5 w-3.5" />
+            </div>
+            <h2 className="text-sm font-semibold text-foreground">Join a Class</h2>
+          </div>
+
+          <div className="lg:flex-1 lg:min-h-0 space-y-3">
+            <div>
+              <Label className="text-xs font-medium">Class Code</Label>
+              <Input
+                value={joinCode}
+                onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
+                placeholder="e.g. 8MPRSW"
+                className="mt-1 uppercase tracking-wide"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-medium">Your Name</Label>
+              <Input
+                value={studentName}
+                onChange={(event) => setStudentName(event.target.value)}
+                placeholder="Only used when joining"
+                className="mt-1"
+              />
+            </div>
+
+            <div className="rounded-lg bg-muted/40 p-3 space-y-1.5">
+              <p className="text-xs font-medium text-foreground">How joining works</p>
+              <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
+                <li>Get the code from whoever started the class</li>
+                <li>You&apos;ll hear live translated audio instantly</li>
+                <li>Handy for testing two-way voice without a phone</li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="shrink-0 pt-3.5 mt-3 border-t border-border/70 space-y-3">
+            <Button onClick={onJoinClass} disabled={joiningClass || !joinCode} variant="outline" className="w-full h-11">
+              {joiningClass ? "Joining…" : "Join Class"}
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              Use this to test two-way voice from a second tab, or enter the same code in the Android app once a class is live.
+            </p>
+          </div>
+        </div>
+
+        {/* Recent Classes */}
+        <div className="rounded-2xl border border-border bg-card p-5 flex flex-col lg:min-h-0">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted text-muted-foreground shrink-0">
+              <History className="h-3.5 w-3.5" />
+            </div>
+            <h2 className="text-sm font-semibold text-foreground">Recent Classes</h2>
+          </div>
+          {classHistory.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Class history will appear here after your first session.</p>
+          ) : (
+            <div className="lg:flex-1 lg:min-h-0 lg:overflow-y-auto -mr-1 pr-1 space-y-2">
+              {classHistory.slice(0, 12).map((session) => (
+                <div
+                  key={session.session_id}
+                  className="flex items-center justify-between text-sm rounded-lg border border-border/70 bg-background px-3 py-2.5"
+                >
+                  <span className="text-muted-foreground text-xs">
+                    {new Date(session.created_at).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  <Badge variant={session.status === "active" ? "default" : "secondary"} className="text-[11px]">
+                    {session.status}
+                  </Badge>
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
