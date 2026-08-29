@@ -135,6 +135,20 @@ export function LiveClassroom() {
   const [lessonContext, setLessonContext] = useState<Record<string, unknown> | null>(null);
   const [slideIndex, setSlideIndex] = useState(0);
   const [activePanel, setActivePanel] = useState<SidePanel>("live");
+  // Which side of the call this browser tab is on. Only meaningful once a
+  // session is live — defaults to "teacher" since Create Class is the
+  // primary flow. Join Class sets this to "student".
+  const [myRole, setMyRole] = useState<"teacher" | "student">("teacher");
+  // Distinct from `starting` (the teacher's Create Class flag): tracks
+  // whether a *joiner* has successfully connected to the raw call. Without
+  // this, `listening` below never became true for a joiner (it only looked
+  // at the AI pipeline's phase, which Join Class never starts) — the
+  // joiner's screen stayed stuck on the Lobby forever even though their
+  // call connected in the background. That's also what let a confused user
+  // re-click "Join Class" (button never disappeared) and open a second
+  // concurrent mic capture + raw-call connection — a real, reproducible
+  // cause of doubled/echoey audio.
+  const [joinedCall, setJoinedCall] = useState(false);
 
   const audio = useClassroomAudio();
   // Destructure the ref out separately from the rest of the hook's return —
@@ -153,7 +167,7 @@ export function LiveClassroom() {
   const sharedMicStreamRef = useRef<MediaStream | null>(null);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const listening = audio.phase !== "idle" || starting;
+  const listening = audio.phase !== "idle" || starting || joinedCall;
   const micMuted = audio.muted;
 
   useEffect(() => {
@@ -234,6 +248,7 @@ export function LiveClassroom() {
   async function handleCreateClass() {
     setStarting(true);
     setSessionError(null);
+    setMyRole("teacher");
     try {
       const created = classroom ?? (await createClassroom(buildClassInput()));
       setClassroom(created);
@@ -285,25 +300,69 @@ export function LiveClassroom() {
   }
 
   async function handleJoinClass() {
+    // Once joined, the Lobby (and this button) unmounts entirely — see
+    // `listening` above — but guard here too in case anything else ever
+    // calls this while already connected, rather than opening a second
+    // concurrent mic capture + raw-call connection.
+    if (joinedCall) return;
     setJoiningClass(true);
     setSessionError(null);
+    setMyRole("student");
     try {
       const joined = await joinClassroom(joinCode, undefined, studentName || "Student");
       setClassroom(joined.classroom);
-      if (joined.active_session) {
-        sessionIdRef.current = joined.active_session.session_id;
-        openPresence(joined.active_session.session_id, studentName || "Student");
-        // Lets two website tabs actually hear each other (e.g. to test the
-        // live call without an Android device) — the tab that joined
-        // connects to the raw call as the student side, symmetric with the
-        // "teacher" side that Start Live Class connects.
-        call.start(joined.active_session.session_id, "student");
+      if (!joined.active_session) {
+        setSessionError("This class hasn't gone live yet — ask the teacher to start it first.");
+        return;
       }
+      sessionIdRef.current = joined.active_session.session_id;
+      openPresence(joined.active_session.session_id, studentName || "Student");
+
+      // One real getUserMedia call, shared the same way Create Class shares
+      // one — see sharedMicStreamRef above. If this fails, leave it
+      // undefined; the call hook falls back to requesting its own stream.
+      try {
+        sharedMicStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      } catch {
+        sharedMicStreamRef.current = null;
+      }
+      setMicStream(sharedMicStreamRef.current);
+      const sharedMic = sharedMicStreamRef.current ?? undefined;
+
+      // Lets two website tabs actually hear each other (e.g. to test the
+      // live call without an Android device) — the tab that joined
+      // connects to the raw call as the student side, symmetric with the
+      // "teacher" side that Create Class connects.
+      await call.start(joined.active_session.session_id, "student", sharedMic);
+      setJoinedCall(true);
     } catch (err) {
       setSessionError(err instanceof ApiError ? err.message : "Could not join class.");
     } finally {
       setJoiningClass(false);
     }
+  }
+
+  function handleLeaveClass() {
+    // The student side of a joined call: tear down only this browser's own
+    // pipelines and return to the Lobby. Deliberately does NOT call
+    // endClassroomSession — that ends the session for the teacher and
+    // every other participant too, which a joiner must never trigger.
+    audio.stop();
+    video.stop();
+    call.stop();
+    sharedMicStreamRef.current?.getTracks().forEach((t) => t.stop());
+    sharedMicStreamRef.current = null;
+    setMicStream(null);
+    presenceRef.current?.close();
+    presenceRef.current = null;
+    sessionIdRef.current = null;
+    setJoinedCall(false);
+    setParticipants([]);
+    setClassroom(null);
+    setJoinCode("");
+    setMyRole("teacher");
   }
 
   async function handleEndClass() {
@@ -313,6 +372,7 @@ export function LiveClassroom() {
     sharedMicStreamRef.current?.getTracks().forEach((t) => t.stop());
     sharedMicStreamRef.current = null;
     setMicStream(null);
+    setJoinedCall(false);
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
@@ -810,12 +870,12 @@ export function LiveClassroom() {
           label="Live"
         />
         <button
-          onClick={handleEndClass}
-          aria-label="End Class"
+          onClick={myRole === "student" ? handleLeaveClass : handleEndClass}
+          aria-label={myRole === "student" ? "Leave Class" : "End Class"}
           className="flex h-11 items-center gap-2 rounded-full bg-destructive px-5 text-sm font-semibold text-white hover:bg-destructive/90 transition-colors"
         >
           <PhoneOff className="h-4 w-4" />
-          End Class
+          {myRole === "student" ? "Leave Class" : "End Class"}
         </button>
       </div>
     </div>
