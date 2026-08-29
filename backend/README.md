@@ -264,7 +264,7 @@ attached to the session:
 {"type": "transcript",  "text": "...", "language": "hi", "speaker": "teacher", "direction": "teacher_to_student"}
 {"type": "translation", "source_language": "hi", "target_language": "sat", "text": "...", "speaker": "teacher", "direction": "teacher_to_student"}
 {"type": "audio",       "format": "audio/wav", "data": "<base64>", "speaker": "teacher", "direction": "teacher_to_student"}
-{"type": "latency",     "total_ms": 1720, "speaker": "teacher", "direction": "teacher_to_student"}
+{"type": "latency",     "total_ms": 1720, "stt_ms": 640, "translation_ms": 310, "speaker": "teacher", "direction": "teacher_to_student"}
 ```
 `speaker` is whoever's audio produced this segment; `direction` is always
 `<speaker>_to_<other>`, so a receiving client can tell whether a message is
@@ -272,10 +272,13 @@ its own outgoing speech or incoming speech to play/display, regardless of
 its own role. On failure (sent only to the connection whose segment
 failed): `{"type": "error", "message": "..."}`. Latency is real wall-clock
 time from receiving the audio frame to emitting the audio response — never
-fabricated. The pipeline calls Sarvam's synchronous REST endpoints in
-sequence per segment (no LLM call in the hot path) to stay lightweight and
-target the ≤3s requirement; swapping in Sarvam's streaming STT protocol
-later is a drop-in change inside `app/services/sarvam_service.py`.
+fabricated. `stt_ms`/`translation_ms` are each stage's own duration (not
+cumulative, each measured immediately after its own call returns);
+`total_ms` is the full end-to-end measurement, unchanged, and still
+includes the TTS stage. The pipeline calls Sarvam's synchronous REST
+endpoints in sequence per segment (no LLM call in the hot path) to stay
+lightweight and target the ≤3s requirement; swapping in Sarvam's streaming
+STT protocol later is a drop-in change inside `app/services/sarvam_service.py`.
 
 The client may also send `"content_type"` in the config message (e.g.
 `"audio/webm;codecs=opus"` for a browser, `"audio/mp4"` for Android's

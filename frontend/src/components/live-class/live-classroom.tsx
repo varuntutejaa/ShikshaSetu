@@ -22,6 +22,7 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,7 +71,7 @@ import {
 } from "@/lib/api";
 import { useTeacherAuth } from "@/lib/teacher-auth";
 import { connectClassroomPresenceSocket } from "@/lib/classroom-socket";
-import { useClassroomAudio } from "@/hooks/use-classroom-audio";
+import { useClassroomAudio, type AudioPhase } from "@/hooks/use-classroom-audio";
 import { useClassroomVideo } from "@/hooks/use-classroom-video";
 import { useClassroomCall } from "@/hooks/use-classroom-call";
 
@@ -98,6 +99,17 @@ function initials(name: string) {
 }
 
 type SidePanel = "people" | "live" | "lesson" | null;
+
+// The Hindi->Santali pipeline stage this phase represents, in order —
+// driven entirely by real events from the backend (segment sent =
+// transcribing, "transcript" event received = translating, "audio" event
+// received = delivered/complete). Never a timed/fake animation.
+const AUDIO_STAGES: { phase: AudioPhase; label: string }[] = [
+  { phase: "listening", label: "Listening" },
+  { phase: "transcribing", label: "Transcribing" },
+  { phase: "translating", label: "Translating" },
+  { phase: "delivered", label: "Complete" },
+];
 
 export function LiveClassroom() {
   const { teacher } = useTeacherAuth();
@@ -584,9 +596,43 @@ export function LiveClassroom() {
               </div>
 
               <TabsContent value="live" className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+                {!micMuted && (
+                  <div className="flex items-center gap-1.5 flex-wrap px-1">
+                    {AUDIO_STAGES.map((stage) => {
+                      const active = audio.phase === stage.phase;
+                      const complete = stage.phase === "delivered";
+                      return (
+                        <span
+                          key={stage.phase}
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium transition-colors",
+                            active
+                              ? complete
+                                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                                : "bg-primary/15 text-primary"
+                              : "bg-muted text-muted-foreground"
+                          )}
+                        >
+                          {complete ? (
+                            <Check className="h-3 w-3" />
+                          ) : (
+                            <span
+                              className={cn(
+                                "h-1.5 w-1.5 rounded-full bg-current",
+                                active ? "animate-pulse" : "opacity-40"
+                              )}
+                            />
+                          )}
+                          {stage.label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
                 <div className="rounded-xl border border-border bg-background p-3.5">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-foreground">Teacher Speech</p>
+                    <p className="text-xs font-semibold text-foreground">Hindi Transcript</p>
                     <Badge variant="secondary" className="font-normal text-[11px]">
                       {TEACHER_LANGUAGE}
                     </Badge>
@@ -595,13 +641,18 @@ export function LiveClassroom() {
                     <p className="text-sm leading-relaxed text-foreground animate-in fade-in slide-in-from-bottom-1 duration-300">
                       “{audio.teacherText}”
                     </p>
+                  ) : audio.phase === "transcribing" ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Zap className="h-3.5 w-3.5 animate-pulse text-primary" />
+                      Transcribing Hindi speech…
+                    </div>
                   ) : (
                     <p className="text-xs text-muted-foreground">Waiting for teacher&apos;s voice input…</p>
                   )}
                 </div>
 
                 <div className="rounded-xl border border-primary/20 bg-primary/[0.04] p-3.5">
-                  <p className="text-xs font-semibold text-foreground mb-2">Student Language · {studentLanguage}</p>
+                  <p className="text-xs font-semibold text-foreground mb-2">Santali Translation · {studentLanguage}</p>
                   {isStudentTextVisible ? (
                     <p className="text-sm leading-relaxed text-primary animate-in fade-in slide-in-from-bottom-1 duration-300">
                       “{audio.studentText}”
@@ -609,22 +660,41 @@ export function LiveClassroom() {
                   ) : audio.phase === "translating" ? (
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <Zap className="h-3.5 w-3.5 animate-pulse text-primary" />
-                      Translating voice-to-voice…
+                      Translating to Santali…
                     </div>
                   ) : (
-                    <p className="text-xs text-muted-foreground">Translated speech will appear here in real time.</p>
+                    <p className="text-xs text-muted-foreground">Santali translation will appear here in real time.</p>
                   )}
                 </div>
 
                 {!micMuted && audio.latencyMs !== null && (
-                  <p
+                  <div
                     className={cn(
-                      "text-xs px-1",
-                      audio.isLatencyHigh ? "text-destructive font-medium" : "text-muted-foreground"
+                      "rounded-lg border px-3 py-2 space-y-1 text-xs",
+                      audio.isLatencyHigh
+                        ? "border-destructive/30 bg-destructive/5 text-destructive"
+                        : "border-border bg-muted/30 text-muted-foreground"
                     )}
                   >
-                    {audio.isLatencyHigh ? "⚠️" : "⚡"} Translation latency: {(audio.latencyMs / 1000).toFixed(1)}s
-                  </p>
+                    <div className="flex items-center justify-between">
+                      <span>STT latency</span>
+                      <span className="font-medium tabular-nums">
+                        {audio.sttLatencyMs !== null ? `${(audio.sttLatencyMs / 1000).toFixed(1)}s` : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Translation latency</span>
+                      <span className="font-medium tabular-nums">
+                        {audio.translationLatencyMs !== null
+                          ? `${(audio.translationLatencyMs / 1000).toFixed(1)}s`
+                          : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-current/10 font-medium">
+                      <span>{audio.isLatencyHigh ? "⚠️ Total" : "⚡ Total"}</span>
+                      <span className="tabular-nums">{(audio.latencyMs / 1000).toFixed(1)}s</span>
+                    </div>
+                  </div>
                 )}
               </TabsContent>
 

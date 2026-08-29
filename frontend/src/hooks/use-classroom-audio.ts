@@ -37,7 +37,7 @@ import {
   type ClassroomSocket,
 } from "@/lib/classroom-socket";
 
-export type AudioPhase = "idle" | "listening" | "translating" | "delivered";
+export type AudioPhase = "idle" | "listening" | "transcribing" | "translating" | "delivered";
 export type WsStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 export interface AudioHistoryItem {
@@ -77,6 +77,10 @@ export function useClassroomAudio() {
   const [studentText, setStudentText] = useState("");
   const [lastDirection, setLastDirection] = useState<"teacher_to_student" | "student_to_teacher" | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  // Per-stage breakdown of latencyMs, from the same "latency" event — each
+  // is that stage's own measured duration (not cumulative), never fabricated.
+  const [sttLatencyMs, setSttLatencyMs] = useState<number | null>(null);
+  const [translationLatencyMs, setTranslationLatencyMs] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [history, setHistory] = useState<AudioHistoryItem[]>([]);
 
@@ -134,7 +138,7 @@ export function useClassroomAudio() {
       if (!mutedRef.current && chunks.length > 0 && socketRef.current) {
         const blob = new Blob(chunks, { type: recorder.mimeType || mimeTypeRef.current });
         socketRef.current.sendAudioSegment(blob);
-        setPhase("translating");
+        setPhase("transcribing");
       }
       if (listeningRef.current) startNewRecorderSegmentRef.current();
     };
@@ -167,6 +171,8 @@ export function useClassroomAudio() {
           }
           setLastDirection(direction);
           setErrorMessage(null);
+          // Transcript back = STT stage is done; now translating.
+          setPhase("translating");
           break;
         }
         case "translation": {
@@ -194,6 +200,8 @@ export function useClassroomAudio() {
           const direction = event.direction ?? lastDirection ?? "teacher_to_student";
           const pending = pendingRef.current;
           setLatencyMs(event.total_ms ?? null);
+          setSttLatencyMs(event.stt_ms ?? null);
+          setTranslationLatencyMs(event.translation_ms ?? null);
           setHistory((h) => [
             {
               direction,
@@ -334,6 +342,8 @@ export function useClassroomAudio() {
     setTeacherText("");
     setStudentText("");
     setLatencyMs(null);
+    setSttLatencyMs(null);
+    setTranslationLatencyMs(null);
   }, []);
 
   useEffect(() => stop, [stop]); // cleanup on unmount
@@ -347,6 +357,8 @@ export function useClassroomAudio() {
     studentText,
     lastDirection,
     latencyMs,
+    sttLatencyMs,
+    translationLatencyMs,
     isLatencyHigh: latencyMs !== null && latencyMs > LATENCY_WARNING_MS,
     errorMessage,
     history,

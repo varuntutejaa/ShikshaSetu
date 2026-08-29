@@ -18,6 +18,9 @@ export interface ClassroomEvent {
   format?: string;
   data?: string;
   total_ms?: number;
+  /** Each stage's own duration (not cumulative) — present on "latency" events. */
+  stt_ms?: number;
+  translation_ms?: number;
   message?: string;
   context_used?: Record<string, unknown> | null;
   /** Who produced this segment - present on config_ack and every broadcast event. */

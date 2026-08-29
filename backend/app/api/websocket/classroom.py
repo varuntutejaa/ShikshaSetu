@@ -34,7 +34,9 @@ side receive it):
   {"type": "transcript",  "text": "...", "language": "hi", "speaker": "teacher", "direction": "teacher_to_student"}
   {"type": "translation", "source_language": "hi", "target_language": "sat", "text": "...", "speaker": "teacher", "direction": "teacher_to_student"}
   {"type": "audio",       "format": "audio/wav", "data": "<base64>", "speaker": "teacher", "direction": "teacher_to_student"}
-  {"type": "latency",     "total_ms": 1720, "speaker": "teacher", "direction": "teacher_to_student"}
+  {"type": "latency",     "total_ms": 1720, "stt_ms": 640, "translation_ms": 310, "speaker": "teacher", "direction": "teacher_to_student"}
+    (stt_ms/translation_ms are each stage's own duration; total_ms is the
+    full end-to-end measurement, unchanged, and still includes the TTS stage)
 On failure at any stage (sent only to the connection whose segment failed):
   {"type": "error", "message": "..."}
 
@@ -269,6 +271,8 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                     content_type=peer.content_type,
                     language_hint=peer.source_language,
                 )
+                after_stt = time.monotonic()
+                stt_ms = round((after_stt - started_at) * 1000)
                 await audio_registry.broadcast(
                     session_id,
                     {
@@ -283,6 +287,8 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                 translation = await get_translation_service().translate(
                     stt_result["text"], peer.source_language, peer.target_language, peer.lesson_context
                 )
+                after_translation = time.monotonic()
+                translation_ms = round((after_translation - after_stt) * 1000)
                 await audio_registry.broadcast(
                     session_id,
                     {
@@ -308,10 +314,23 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                     },
                 )
 
+                # stt_ms / translation_ms are each stage's own wall-clock
+                # duration (not cumulative); total_ms is measured end-to-end
+                # from the same started_at as before, unchanged, and still
+                # includes the TTS stage — this is purely additive detail
+                # for the transcript/translation UI panel, not a
+                # replacement for the existing total_ms consumers.
                 total_ms = round((time.monotonic() - started_at) * 1000)
                 await audio_registry.broadcast(
                     session_id,
-                    {"type": "latency", "total_ms": total_ms, "speaker": peer.role, "direction": peer.direction},
+                    {
+                        "type": "latency",
+                        "total_ms": total_ms,
+                        "stt_ms": stt_ms,
+                        "translation_ms": translation_ms,
+                        "speaker": peer.role,
+                        "direction": peer.direction,
+                    },
                 )
 
             except AppError as exc:
