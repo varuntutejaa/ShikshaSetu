@@ -104,6 +104,11 @@ export function LiveClassroom() {
   const [joinCode, setJoinCode] = useState("");
   const [studentName, setStudentName] = useState("");
   const [joiningClass, setJoiningClass] = useState(false);
+  // Mirrors sharedMicStreamRef below, reactively — the Waveform visualizer
+  // needs to actually receive the stream via props (a ref update alone
+  // doesn't trigger a re-render) to start analyzing real audio levels as
+  // soon as the mic is ready.
+  const [micStream, setMicStream] = useState<MediaStream | null>(null);
   const [timeRemainingSec, setTimeRemainingSec] = useState<number | null>(null);
   const [participants, setParticipants] = useState<ClassroomParticipant[]>([]);
   const [classHistory, setClassHistory] = useState<ClassSession[]>([]);
@@ -237,6 +242,7 @@ export function LiveClassroom() {
       } catch {
         sharedMicStreamRef.current = null;
       }
+      setMicStream(sharedMicStreamRef.current);
       const sharedMic = sharedMicStreamRef.current ?? undefined;
 
       await Promise.all([
@@ -287,6 +293,7 @@ export function LiveClassroom() {
     call.stop();
     sharedMicStreamRef.current?.getTracks().forEach((t) => t.stop());
     sharedMicStreamRef.current = null;
+    setMicStream(null);
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
@@ -536,7 +543,7 @@ export function LiveClassroom() {
 
             {!micMuted && (
               <div className="absolute bottom-3 right-3">
-                <Waveform active={!micMuted} />
+                <Waveform stream={micStream} active={!micMuted} />
               </div>
             )}
           </div>
