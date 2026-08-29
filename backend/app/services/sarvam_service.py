@@ -101,13 +101,24 @@ class SarvamService:
             return {"text": text, "language": language_hint, "provider": "mock"}
 
         client = self._get_client()
-        files = {"file": (filename, audio_bytes, content_type)}
+        # Verified live: Sarvam matches the multipart file's content-type
+        # against an exact allowlist (e.g. "audio/webm", "audio/wav") and
+        # 400s on anything with codec parameters attached — a real browser
+        # MediaRecorder reports "audio/webm;codecs=opus", which Sarvam
+        # rejects outright even though the base "audio/webm" is allowed and
+        # opus is exactly what's inside a webm/opus container. Strip
+        # parameters before sending; the bytes themselves are untouched.
+        base_content_type = content_type.split(";")[0].strip() or content_type
+        files = {"file": (filename, audio_bytes, base_content_type)}
         data = {"model": STT_MODEL, "mode": "transcribe"}
         try:
             response = await client.post("/speech-to-text", files=files, data=data)
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise UpstreamTimeoutError("Sarvam speech-to-text request timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error("Sarvam STT failed: %s | response body: %s", exc, exc.response.text[:500])
+            raise SpeechServiceError("Speech-to-text service temporarily unavailable") from exc
         except httpx.HTTPError as exc:
             logger.error("Sarvam STT failed: %s", exc)
             raise SpeechServiceError("Speech-to-text service temporarily unavailable") from exc
@@ -157,6 +168,9 @@ class SarvamService:
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise UpstreamTimeoutError("Sarvam translate request timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error("Sarvam translate failed: %s | response body: %s", exc, exc.response.text[:500])
+            raise TranslationFailedError("Translation service temporarily unavailable") from exc
         except httpx.HTTPError as exc:
             logger.error("Sarvam translate failed: %s", exc)
             raise TranslationFailedError("Translation service temporarily unavailable") from exc
@@ -193,6 +207,9 @@ class SarvamService:
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise UpstreamTimeoutError("Sarvam text-to-speech request timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error("Sarvam TTS failed: %s | response body: %s", exc, exc.response.text[:500])
+            raise SpeechServiceError("Text-to-speech service temporarily unavailable") from exc
         except httpx.HTTPError as exc:
             logger.error("Sarvam TTS failed: %s", exc)
             raise SpeechServiceError("Text-to-speech service temporarily unavailable") from exc
