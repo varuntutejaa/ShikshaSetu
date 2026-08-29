@@ -34,7 +34,16 @@ logger = logging.getLogger("shikshasetu.sarvam")
 
 STT_MODEL = "saaras:v3"
 TTS_MODEL = "bulbul:v3"
-DEFAULT_TTS_SPEAKER = "anushka"
+# Verified against a live call: bulbul:v3 rejects "anushka" (a bulbul:v2
+# speaker name) with "Speaker 'anushka' is not compatible with model
+# bulbul:v3" — "priya" is one of bulbul:v3's actual documented speakers.
+DEFAULT_TTS_SPEAKER = "priya"
+# mayura:v1 (Sarvam's translate default when no model is given) does not
+# support Santali — verified live: it 400s with "Language 'sat-IN' is not
+# supported in mayura:v1. Please switch to sarvam-translate:v1 to use this
+# language." sarvam-translate:v1 supports Santali and was verified live for
+# hi->sat and hi->en both, so it's used for every translate call.
+TRANSLATE_MODEL = "sarvam-translate:v1"
 
 MOCK_TRANSCRIPTS = {
     "hi": "तीन और दो जोड़ने पर कितने होते हैं?",
@@ -139,6 +148,7 @@ class SarvamService:
             "source_language_code": sarvam_code_for(source_language),
             "target_language_code": sarvam_code_for(target_language),
             "mode": "formal",
+            "model": TRANSLATE_MODEL,
         }
         try:
             response = await client.post(
@@ -160,7 +170,7 @@ class SarvamService:
     # ------------------------------------------------------------------
     async def text_to_speech(self, text: str, target_language: str) -> dict:
         target_cfg = get_language(target_language)
-        can_call_sarvam = self._live and target_cfg is not None and target_cfg.sarvam_supported
+        can_call_sarvam = self._live and target_cfg is not None and target_cfg.tts_supported
 
         if not can_call_sarvam:
             return {

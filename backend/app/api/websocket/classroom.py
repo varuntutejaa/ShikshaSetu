@@ -302,17 +302,34 @@ async def classroom_socket(websocket: WebSocket, session_id: str) -> None:
                     },
                 )
 
-                tts_result = await sarvam.text_to_speech(translation["translated_text"], peer.target_language)
-                await audio_registry.broadcast(
-                    session_id,
-                    {
-                        "type": "audio",
-                        "format": tts_result["format"],
-                        "data": base64.b64encode(tts_result["audio_bytes"]).decode("ascii"),
-                        "speaker": peer.role,
-                        "direction": peer.direction,
-                    },
-                )
+                # TTS is best-effort and kept in its own try/except: Sarvam's
+                # bulbul TTS does not (as of this writing) accept Santali
+                # text, so a teacher_to_student (hi->sat) segment would
+                # otherwise throw here and lose the transcript/translation
+                # already broadcast above, plus the latency measurement
+                # below. Text output is what this feature actually needs
+                # right now; voice synthesis degrades gracefully instead of
+                # taking the whole segment down.
+                try:
+                    tts_result = await sarvam.text_to_speech(translation["translated_text"], peer.target_language)
+                    await audio_registry.broadcast(
+                        session_id,
+                        {
+                            "type": "audio",
+                            "format": tts_result["format"],
+                            "data": base64.b64encode(tts_result["audio_bytes"]).decode("ascii"),
+                            "speaker": peer.role,
+                            "direction": peer.direction,
+                        },
+                    )
+                except AppError as exc:
+                    logger.warning(
+                        "Speech synthesis skipped for session %s (%s->%s): %s",
+                        session_id,
+                        peer.source_language,
+                        peer.target_language,
+                        exc.message,
+                    )
 
                 # stt_ms / translation_ms are each stage's own wall-clock
                 # duration (not cumulative); total_ms is measured end-to-end
