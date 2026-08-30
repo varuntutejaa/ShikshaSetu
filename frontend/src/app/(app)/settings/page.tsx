@@ -40,12 +40,14 @@ export default function SettingsPage() {
   const { teacher, updateTeacher } = useTeacherAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Form draft state (unsaved until "Save Changes" is clicked)
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [schoolName, setSchoolName] = useState("");
   const [teacherLang, setTeacherLang] = useState("Hindi");
   const [studentLang, setStudentLang] = useState("Santhali");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
   const [notifyReports, setNotifyReports] = useState(true);
   const [notifyGaps, setNotifyGaps] = useState(true);
@@ -55,12 +57,14 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
+  // Populate initial state from teacher auth session
   useEffect(() => {
     if (teacher) {
       setName(teacher.name ?? "");
       setEmail(teacher.email ?? "");
       setPhone(teacher.phone ?? "");
       setSchoolName(teacher.school_name ?? "");
+      setAvatarUrl(teacher.avatar_url ?? null);
       if (teacher.default_teacher_language) {
         setTeacherLang(LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] ?? "Hindi");
       }
@@ -88,9 +92,10 @@ export default function SettingsPage() {
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
       if (dataUrl) {
-        updateTeacher({ avatar_url: dataUrl });
-        setFeedback("Profile photo updated successfully!");
-        setTimeout(() => setFeedback(null), 3000);
+        // Set local draft avatar url only — NOT saved until Save Changes is clicked!
+        setAvatarUrl(dataUrl);
+        setFeedback("New photo selected! Click 'Save Changes' to apply.");
+        setTimeout(() => setFeedback(null), 4000);
       }
     };
     reader.readAsDataURL(file);
@@ -98,10 +103,11 @@ export default function SettingsPage() {
   }
 
   function handleRemovePhoto() {
-    updateTeacher({ avatar_url: null });
+    // Set local draft avatar url to null — NOT saved until Save Changes is clicked!
+    setAvatarUrl(null);
     setIsPreviewOpen(false);
-    setFeedback("Profile photo removed.");
-    setTimeout(() => setFeedback(null), 3000);
+    setFeedback("Photo removed from draft. Click 'Save Changes' to confirm.");
+    setTimeout(() => setFeedback(null), 4000);
   }
 
   function handleSaveChanges(e?: React.FormEvent) {
@@ -116,6 +122,7 @@ export default function SettingsPage() {
         school_name: schoolName.trim() || null,
         default_teacher_language: LANGUAGE_NAME_TO_CODE[teacherLang] ?? "hi",
         default_student_language: LANGUAGE_NAME_TO_CODE[studentLang] ?? "sat",
+        avatar_url: avatarUrl,
       });
       setIsSaving(false);
       setFeedback("Settings saved successfully!");
@@ -124,11 +131,13 @@ export default function SettingsPage() {
   }
 
   function handleCancel() {
+    // Revert ALL draft fields and profile photo back to original saved teacher profile
     if (teacher) {
       setName(teacher.name ?? "");
       setEmail(teacher.email ?? "");
       setPhone(teacher.phone ?? "");
       setSchoolName(teacher.school_name ?? "");
+      setAvatarUrl(teacher.avatar_url ?? null);
       if (teacher.default_teacher_language) {
         setTeacherLang(LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] ?? "Hindi");
       }
@@ -136,7 +145,7 @@ export default function SettingsPage() {
         setStudentLang(LANGUAGE_CODE_TO_NAME[teacher.default_student_language] ?? "Santhali");
       }
     }
-    setFeedback("All unsaved changes reset.");
+    setFeedback("Cancelled! Profile restored to original settings.");
     setTimeout(() => setFeedback(null), 3000);
   }
 
@@ -169,18 +178,18 @@ export default function SettingsPage() {
             </DialogTitle>
           </DialogHeader>
           <div className="mt-2 flex flex-col items-center justify-center p-3 rounded-xl bg-muted/40 overflow-hidden border border-border min-h-[320px]">
-            {teacher?.avatar_url ? (
+            {avatarUrl ? (
               <img
-                src={teacher.avatar_url}
-                alt={teacher.name || "Profile Photo"}
+                src={avatarUrl}
+                alt={name || "Profile Photo"}
                 className="max-h-[75vh] w-auto max-w-full rounded-lg object-contain shadow-md"
               />
             ) : (
-              <p className="text-sm text-muted-foreground">No profile photo uploaded.</p>
+              <p className="text-sm text-muted-foreground">No profile photo selected.</p>
             )}
           </div>
           <div className="flex items-center justify-between gap-2 mt-4 pt-2 border-t border-border">
-            {teacher?.avatar_url ? (
+            {avatarUrl ? (
               <Button type="button" variant="ghost" size="sm" onClick={handleRemovePhoto} className="text-destructive hover:text-destructive hover:bg-destructive/10">
                 <Trash2 className="h-4 w-4 mr-1.5" /> Remove Photo
               </Button>
@@ -206,21 +215,21 @@ export default function SettingsPage() {
           <button
             type="button"
             onClick={() => {
-              if (teacher?.avatar_url) {
+              if (avatarUrl) {
                 setIsPreviewOpen(true);
               } else {
                 triggerPhotoUpload();
               }
             }}
             className="relative group rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer shrink-0"
-            title={teacher?.avatar_url ? "Click to view photo in full size" : "Click to upload photo"}
+            title={avatarUrl ? "Click to view photo in full size" : "Click to upload photo"}
           >
             <Avatar className="h-16 w-16 border border-border transition-transform group-hover:scale-105">
-              {teacher?.avatar_url && (
-                <AvatarImage src={teacher.avatar_url} alt={teacher.name} />
+              {avatarUrl && (
+                <AvatarImage src={avatarUrl} alt={name || "Profile Photo"} />
               )}
               <AvatarFallback className="bg-primary/10 text-primary text-xl font-semibold">
-                {teacher ? initials(name || teacher.name) : "…"}
+                {initials(name || teacher?.name || "Teacher")}
               </AvatarFallback>
             </Avatar>
           </button>
@@ -229,7 +238,7 @@ export default function SettingsPage() {
               <Camera className="h-3.5 w-3.5" />
               Upload Photo
             </Button>
-            {teacher?.avatar_url && (
+            {avatarUrl && (
               <Button type="button" variant="ghost" size="sm" onClick={handleRemovePhoto} className="gap-1.5 text-muted-foreground hover:text-destructive">
                 <Trash2 className="h-3.5 w-3.5" />
                 Remove
@@ -357,7 +366,7 @@ export default function SettingsPage() {
 
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-border">
         <p className="text-xs text-muted-foreground">
-          Changes will be saved to your active session profile.
+          Click &apos;Save Changes&apos; to confirm edits, or &apos;Cancel&apos; to discard.
         </p>
         <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
           <Button
