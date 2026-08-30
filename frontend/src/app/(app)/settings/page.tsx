@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { Bell, Globe, School, ShieldCheck, User } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Bell, Globe, School, ShieldCheck, User, Check, Camera, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Select,
   SelectContent,
@@ -17,10 +17,11 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { LANGUAGES } from "@/lib/mock-data";
-import { LANGUAGE_CODE_TO_NAME } from "@/lib/api";
+import { LANGUAGE_CODE_TO_NAME, LANGUAGE_NAME_TO_CODE } from "@/lib/api";
 import { useTeacherAuth } from "@/lib/teacher-auth";
 
 function initials(name: string) {
+  if (!name) return "T";
   return name
     .split(" ")
     .map((n) => n[0])
@@ -30,14 +31,103 @@ function initials(name: string) {
 }
 
 export default function SettingsPage() {
-  const { teacher } = useTeacherAuth();
+  const { teacher, updateTeacher } = useTeacherAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [schoolName, setSchoolName] = useState("");
+  const [teacherLang, setTeacherLang] = useState("Hindi");
+  const [studentLang, setStudentLang] = useState("Santhali");
+
   const [notifyReports, setNotifyReports] = useState(true);
   const [notifyGaps, setNotifyGaps] = useState(true);
   const [notifyDigest, setNotifyDigest] = useState(false);
 
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (teacher) {
+      setName(teacher.name ?? "");
+      setEmail(teacher.email ?? "");
+      setPhone(teacher.phone ?? "");
+      setSchoolName(teacher.school_name ?? "");
+      if (teacher.default_teacher_language) {
+        setTeacherLang(LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] ?? "Hindi");
+      }
+      if (teacher.default_student_language) {
+        setStudentLang(LANGUAGE_CODE_TO_NAME[teacher.default_student_language] ?? "Santhali");
+      }
+    }
+  }, [teacher]);
+
+  function triggerPhotoUpload() {
+    fileInputRef.current?.click();
+  }
+
+  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setFeedback("Error: Photo size must be under 5MB.");
+      setTimeout(() => setFeedback(null), 4000);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        updateTeacher({ avatar_url: dataUrl });
+        setFeedback("Profile photo updated successfully!");
+        setTimeout(() => setFeedback(null), 3000);
+      }
+    };
+    reader.readAsDataURL(file);
+    // Reset file input value so re-selecting the same file fires onChange
+    e.target.value = "";
+  }
+
+  function handleRemovePhoto() {
+    updateTeacher({ avatar_url: null });
+    setFeedback("Profile photo removed.");
+    setTimeout(() => setFeedback(null), 3000);
+  }
+
+  function handleSaveChanges() {
+    updateTeacher({
+      name,
+      email,
+      phone,
+      school_name: schoolName,
+      default_teacher_language: LANGUAGE_NAME_TO_CODE[teacherLang] ?? "hi",
+      default_student_language: LANGUAGE_NAME_TO_CODE[studentLang] ?? "sat",
+    });
+    setFeedback("Settings saved successfully!");
+    setTimeout(() => setFeedback(null), 3000);
+  }
+
   return (
     <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
       <PageHeader title="Settings" subtitle="Manage your profile, classroom and notification preferences." />
+
+      {feedback && (
+        <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+          <Check className="h-4 w-4 shrink-0" />
+          <span>{feedback}</span>
+        </div>
+      )}
+
+      {/* Hidden File Input for Profile Photo Upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept="image/png, image/jpeg, image/webp, image/gif"
+        className="hidden"
+        onChange={handlePhotoChange}
+      />
 
       <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
         <div className="flex items-center gap-2 mb-5">
@@ -45,25 +135,39 @@ export default function SettingsPage() {
           <h3 className="font-semibold text-foreground">Teacher Profile</h3>
         </div>
         <div className="flex items-center gap-4 mb-6">
-          <Avatar className="h-14 w-14">
-            <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
-              {teacher ? initials(teacher.name) : "…"}
+          <Avatar className="h-16 w-16 border border-border">
+            {teacher?.avatar_url && (
+              <AvatarImage src={teacher.avatar_url} alt={teacher.name} />
+            )}
+            <AvatarFallback className="bg-primary/10 text-primary text-xl font-semibold">
+              {teacher ? initials(name || teacher.name) : "…"}
             </AvatarFallback>
           </Avatar>
-          <Button variant="outline" size="sm" disabled>Change Photo</Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" onClick={triggerPhotoUpload} className="gap-1.5">
+              <Camera className="h-3.5 w-3.5" />
+              Upload Photo
+            </Button>
+            {teacher?.avatar_url && (
+              <Button variant="ghost" size="sm" onClick={handleRemovePhoto} className="gap-1.5 text-muted-foreground hover:text-destructive">
+                <Trash2 className="h-3.5 w-3.5" />
+                Remove
+              </Button>
+            )}
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label>Full Name</Label>
-            <Input defaultValue={teacher?.name ?? ""} key={teacher?.id ?? "loading"} />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Arshita" />
           </div>
           <div className="space-y-1.5">
             <Label>Email</Label>
-            <Input defaultValue={teacher?.email ?? ""} key={`${teacher?.id ?? "loading"}-email`} />
+            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="e.g. teacher@gmail.com" />
           </div>
           <div className="space-y-1.5">
             <Label>Phone</Label>
-            <Input defaultValue={teacher?.phone ?? ""} key={`${teacher?.id ?? "loading"}-phone`} />
+            <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98765 43210" />
           </div>
         </div>
       </section>
@@ -76,14 +180,11 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5 sm:col-span-2">
             <Label>School</Label>
-            <Input defaultValue={teacher?.school_name ?? ""} key={`${teacher?.id ?? "loading"}-school`} placeholder="Not set" />
+            <Input value={schoolName} onChange={(e) => setSchoolName(e.target.value)} placeholder="Enter school name" />
           </div>
           <div className="space-y-1.5">
             <Label>Default Teacher Language</Label>
-            <Select
-              defaultValue={teacher ? LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] : undefined}
-              key={`${teacher?.id ?? "loading"}-tlang`}
-            >
+            <Select value={teacherLang} onValueChange={setTeacherLang}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {LANGUAGES.map((l) => (
@@ -94,10 +195,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-1.5">
             <Label>Default Student Language</Label>
-            <Select
-              defaultValue={teacher ? LANGUAGE_CODE_TO_NAME[teacher.default_student_language] : undefined}
-              key={`${teacher?.id ?? "loading"}-slang`}
-            >
+            <Select value={studentLang} onValueChange={setStudentLang}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {LANGUAGES.map((l) => (
@@ -177,8 +275,17 @@ export default function SettingsPage() {
       </section>
 
       <div className="flex justify-end gap-3">
-        <Button variant="outline">Cancel</Button>
-        <Button>Save Changes</Button>
+        <Button variant="outline" onClick={() => {
+          if (teacher) {
+            setName(teacher.name ?? "");
+            setEmail(teacher.email ?? "");
+            setPhone(teacher.phone ?? "");
+            setSchoolName(teacher.school_name ?? "");
+          }
+        }}>
+          Cancel
+        </Button>
+        <Button onClick={handleSaveChanges}>Save Changes</Button>
       </div>
     </div>
   );

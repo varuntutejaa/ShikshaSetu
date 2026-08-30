@@ -30,7 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { logoutTeacher, LANGUAGE_CODE_TO_NAME } from "@/lib/api";
@@ -175,6 +175,9 @@ export function TopNav() {
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-1.5 sm:gap-2 rounded-full pl-1 pr-1.5 sm:pr-2 py-1 hover:bg-muted transition-colors">
               <Avatar className="h-8 w-8">
+                {teacher?.avatar_url && (
+                  <AvatarImage src={teacher.avatar_url} alt={teacherName} />
+                )}
                 <AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">
                   {teacher ? initials(teacher.name) : "…"}
                 </AvatarFallback>

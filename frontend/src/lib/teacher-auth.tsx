@@ -88,6 +88,20 @@ export function clearTeacherAuth() {
   notifyListeners();
 }
 
+export function updateTeacherProfile(updates: Partial<Teacher>) {
+  if (typeof window === "undefined") return;
+  const teacherJson = localStorage.getItem(TEACHER_KEY);
+  if (!teacherJson) return;
+  try {
+    const current = JSON.parse(teacherJson) as Teacher;
+    const updated = { ...current, ...updates };
+    localStorage.setItem(TEACHER_KEY, JSON.stringify(updated));
+    notifyListeners();
+  } catch {
+    // ignore parse errors
+  }
+}
+
 /** Hydration-safe read of whatever session (if any) already exists on this
  * device — usable standalone, without TeacherAuthProvider, e.g. from the
  * login page to bounce an already-signed-in teacher straight past itself. */
@@ -114,12 +128,14 @@ interface TeacherAuthContextValue extends StoredSession {
    * call so every page reflects it immediately. */
   setSession: (auth: TeacherAuthResult) => void;
   clearSession: () => void;
+  updateTeacher: (updates: Partial<Teacher>) => void;
 }
 
 const TeacherAuthContext = createContext<TeacherAuthContextValue>({
   ...EMPTY_SESSION,
   setSession: () => {},
   clearSession: () => {},
+  updateTeacher: () => {},
 });
 
 export function TeacherAuthProvider({ children }: { children: React.ReactNode }) {
@@ -129,6 +145,7 @@ export function TeacherAuthProvider({ children }: { children: React.ReactNode })
     ...session,
     setSession: persistTeacherAuth,
     clearSession: clearTeacherAuth,
+    updateTeacher: updateTeacherProfile,
   };
 
   return <TeacherAuthContext.Provider value={value}>{children}</TeacherAuthContext.Provider>;

@@ -208,6 +208,7 @@ export interface Teacher {
   school_name: string | null;
   default_teacher_language: string;
   default_student_language: string;
+  avatar_url?: string | null;
 }
 
 export interface TeacherAuthResult {
