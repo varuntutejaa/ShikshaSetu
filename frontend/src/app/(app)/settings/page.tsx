@@ -9,6 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -46,6 +52,7 @@ export default function SettingsPage() {
   const [notifyDigest, setNotifyDigest] = useState(false);
 
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
     if (teacher) {
@@ -86,12 +93,12 @@ export default function SettingsPage() {
       }
     };
     reader.readAsDataURL(file);
-    // Reset file input value so re-selecting the same file fires onChange
     e.target.value = "";
   }
 
   function handleRemovePhoto() {
     updateTeacher({ avatar_url: null });
+    setIsPreviewOpen(false);
     setFeedback("Profile photo removed.");
     setTimeout(() => setFeedback(null), 3000);
   }
@@ -129,20 +136,70 @@ export default function SettingsPage() {
         onChange={handlePhotoChange}
       />
 
+      {/* Full Photo Modal Preview Lightbox */}
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent className="max-w-3xl p-5 bg-card">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold">
+              Profile Photo Preview
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-2 flex flex-col items-center justify-center p-3 rounded-xl bg-muted/40 overflow-hidden border border-border min-h-[320px]">
+            {teacher?.avatar_url ? (
+              <img
+                src={teacher.avatar_url}
+                alt={teacher.name || "Profile Photo"}
+                className="max-h-[75vh] w-auto max-w-full rounded-lg object-contain shadow-md"
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">No profile photo uploaded.</p>
+            )}
+          </div>
+          <div className="flex items-center justify-between gap-2 mt-4 pt-2 border-t border-border">
+            {teacher?.avatar_url ? (
+              <Button variant="ghost" size="sm" onClick={handleRemovePhoto} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                <Trash2 className="h-4 w-4 mr-1.5" /> Remove Photo
+              </Button>
+            ) : <div />}
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => { setIsPreviewOpen(false); triggerPhotoUpload(); }}>
+                <Camera className="h-4 w-4 mr-1.5" /> Change Photo
+              </Button>
+              <Button variant="default" size="sm" onClick={() => setIsPreviewOpen(false)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <section className="rounded-xl border border-border bg-card p-5 sm:p-6">
         <div className="flex items-center gap-2 mb-5">
           <User className="h-4 w-4 text-primary" />
           <h3 className="font-semibold text-foreground">Teacher Profile</h3>
         </div>
         <div className="flex items-center gap-4 mb-6">
-          <Avatar className="h-16 w-16 border border-border">
-            {teacher?.avatar_url && (
-              <AvatarImage src={teacher.avatar_url} alt={teacher.name} />
-            )}
-            <AvatarFallback className="bg-primary/10 text-primary text-xl font-semibold">
-              {teacher ? initials(name || teacher.name) : "…"}
-            </AvatarFallback>
-          </Avatar>
+          <button
+            type="button"
+            onClick={() => {
+              if (teacher?.avatar_url) {
+                setIsPreviewOpen(true);
+              } else {
+                triggerPhotoUpload();
+              }
+            }}
+            className="relative group rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary cursor-pointer shrink-0"
+            title={teacher?.avatar_url ? "Click to view photo in full size" : "Click to upload photo"}
+          >
+            <Avatar className="h-16 w-16 border border-border transition-transform group-hover:scale-105">
+              {teacher?.avatar_url && (
+                <AvatarImage src={teacher.avatar_url} alt={teacher.name} />
+              )}
+              <AvatarFallback className="bg-primary/10 text-primary text-xl font-semibold">
+                {teacher ? initials(name || teacher.name) : "…"}
+              </AvatarFallback>
+            </Avatar>
+          </button>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={triggerPhotoUpload} className="gap-1.5">
               <Camera className="h-3.5 w-3.5" />
