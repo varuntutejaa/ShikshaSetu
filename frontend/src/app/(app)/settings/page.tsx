@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Bell, Globe, School, ShieldCheck, User, Check, Camera, Trash2 } from "lucide-react";
+import { Bell, Globe, School, ShieldCheck, User, Check, Camera, Trash2, Save, Loader2, RotateCcw } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -52,6 +52,7 @@ export default function SettingsPage() {
   const [notifyDigest, setNotifyDigest] = useState(false);
 
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
@@ -103,25 +104,48 @@ export default function SettingsPage() {
     setTimeout(() => setFeedback(null), 3000);
   }
 
-  function handleSaveChanges() {
-    updateTeacher({
-      name,
-      email,
-      phone,
-      school_name: schoolName,
-      default_teacher_language: LANGUAGE_NAME_TO_CODE[teacherLang] ?? "hi",
-      default_student_language: LANGUAGE_NAME_TO_CODE[studentLang] ?? "sat",
-    });
-    setFeedback("Settings saved successfully!");
+  function handleSaveChanges(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    setIsSaving(true);
+
+    setTimeout(() => {
+      updateTeacher({
+        name: name.trim() || (teacher?.name ?? "Teacher"),
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+        school_name: schoolName.trim() || null,
+        default_teacher_language: LANGUAGE_NAME_TO_CODE[teacherLang] ?? "hi",
+        default_student_language: LANGUAGE_NAME_TO_CODE[studentLang] ?? "sat",
+      });
+      setIsSaving(false);
+      setFeedback("Settings saved successfully!");
+      setTimeout(() => setFeedback(null), 4000);
+    }, 300);
+  }
+
+  function handleCancel() {
+    if (teacher) {
+      setName(teacher.name ?? "");
+      setEmail(teacher.email ?? "");
+      setPhone(teacher.phone ?? "");
+      setSchoolName(teacher.school_name ?? "");
+      if (teacher.default_teacher_language) {
+        setTeacherLang(LANGUAGE_CODE_TO_NAME[teacher.default_teacher_language] ?? "Hindi");
+      }
+      if (teacher.default_student_language) {
+        setStudentLang(LANGUAGE_CODE_TO_NAME[teacher.default_student_language] ?? "Santhali");
+      }
+    }
+    setFeedback("All unsaved changes reset.");
     setTimeout(() => setFeedback(null), 3000);
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+    <form onSubmit={handleSaveChanges} className="mx-auto max-w-3xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
       <PageHeader title="Settings" subtitle="Manage your profile, classroom and notification preferences." />
 
       {feedback && (
-        <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+        <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-sm font-medium text-emerald-600 dark:text-emerald-400 animate-in fade-in-50">
           <Check className="h-4 w-4 shrink-0" />
           <span>{feedback}</span>
         </div>
@@ -157,15 +181,15 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center justify-between gap-2 mt-4 pt-2 border-t border-border">
             {teacher?.avatar_url ? (
-              <Button variant="ghost" size="sm" onClick={handleRemovePhoto} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+              <Button type="button" variant="ghost" size="sm" onClick={handleRemovePhoto} className="text-destructive hover:text-destructive hover:bg-destructive/10">
                 <Trash2 className="h-4 w-4 mr-1.5" /> Remove Photo
               </Button>
             ) : <div />}
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => { setIsPreviewOpen(false); triggerPhotoUpload(); }}>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setIsPreviewOpen(false); triggerPhotoUpload(); }}>
                 <Camera className="h-4 w-4 mr-1.5" /> Change Photo
               </Button>
-              <Button variant="default" size="sm" onClick={() => setIsPreviewOpen(false)}>
+              <Button type="button" variant="default" size="sm" onClick={() => setIsPreviewOpen(false)}>
                 Done
               </Button>
             </div>
@@ -201,12 +225,12 @@ export default function SettingsPage() {
             </Avatar>
           </button>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={triggerPhotoUpload} className="gap-1.5">
+            <Button type="button" variant="outline" size="sm" onClick={triggerPhotoUpload} className="gap-1.5">
               <Camera className="h-3.5 w-3.5" />
               Upload Photo
             </Button>
             {teacher?.avatar_url && (
-              <Button variant="ghost" size="sm" onClick={handleRemovePhoto} className="gap-1.5 text-muted-foreground hover:text-destructive">
+              <Button type="button" variant="ghost" size="sm" onClick={handleRemovePhoto} className="gap-1.5 text-muted-foreground hover:text-destructive">
                 <Trash2 className="h-3.5 w-3.5" />
                 Remove
               </Button>
@@ -328,22 +352,43 @@ export default function SettingsPage() {
           Student data is stored securely in accordance with the Jharkhand Smart
           Education Programme guidelines.
         </p>
-        <Button variant="outline" size="sm">Download my data</Button>
+        <Button type="button" variant="outline" size="sm">Download my data</Button>
       </section>
 
-      <div className="flex justify-end gap-3">
-        <Button variant="outline" onClick={() => {
-          if (teacher) {
-            setName(teacher.name ?? "");
-            setEmail(teacher.email ?? "");
-            setPhone(teacher.phone ?? "");
-            setSchoolName(teacher.school_name ?? "");
-          }
-        }}>
-          Cancel
-        </Button>
-        <Button onClick={handleSaveChanges}>Save Changes</Button>
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-border">
+        <p className="text-xs text-muted-foreground">
+          Changes will be saved to your active session profile.
+        </p>
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleCancel}
+            disabled={isSaving}
+            className="gap-1.5"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={isSaving}
+            className="gap-1.5 min-w-[145px]"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Save className="h-4 w-4" />
+                Save Changes
+              </>
+            )}
+          </Button>
+        </div>
       </div>
-    </div>
+    </form>
   );
 }
