@@ -9,7 +9,7 @@ import { LearningGapsCard } from "@/components/dashboard/learning-gaps-card";
 import { listStudents, getStudentAssessments, getClassroomMetrics, ApiError } from "@/lib/api";
 import { useTeacherAuth } from "@/lib/teacher-auth";
 
-function timeOfDayGreeting() {
+function getTimeOfDayGreeting() {
   const hour = new Date().getHours();
   if (hour < 12) return "Good Morning";
   if (hour < 17) return "Good Afternoon";
@@ -26,6 +26,11 @@ interface DashboardStats {
 export default function DashboardPage() {
   const { teacher } = useTeacherAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [greeting, setGreeting] = useState<string>("Good Morning");
+
+  useEffect(() => {
+    setGreeting(getTimeOfDayGreeting());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +78,7 @@ export default function DashboardPage() {
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8 space-y-6">
       <div>
         <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
-          {timeOfDayGreeting()}
+          {greeting}
           {teacher?.name ? `, ${teacher.name.split(" ")[0]}` : ""} 👋
         </h1>
         <p className="mt-1 text-muted-foreground">
